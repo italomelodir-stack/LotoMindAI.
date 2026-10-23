@@ -120,7 +120,7 @@ def compra(loja, q, corpo, cid):
 
 @rota("GET", "/api/clientes")
 def clientes(loja, q, corpo):
-    return loja.listar_clientes(q.get("busca", ""), _bool(q, "ativos"))
+    return loja.listar_clientes(q.get("busca", ""), _bool(q, "ativos"), _bool(q, "devendo"))
 
 
 @rota("POST", "/api/clientes")
@@ -141,6 +141,31 @@ def editar_cliente(loja, q, corpo, cid):
 @rota("POST", r"/api/clientes/(?P<cid>\d+)/receber")
 def receber_cliente(loja, q, corpo, cid):
     return loja.receber_do_cliente(int(cid), corpo.get("valor"), corpo.get("forma"))
+
+
+@rota("GET", r"/api/clientes/(?P<cid>\d+)/debitos")
+def debitos(loja, q, corpo, cid):
+    return {"cliente": loja.obter_cliente(int(cid)), "compras": loja.debitos_cliente(int(cid))}
+
+
+@rota("POST", r"/api/clientes/(?P<cid>\d+)/baixa")
+def baixa(loja, q, corpo, cid):
+    return loja.receber_conta_cliente(int(cid), corpo)
+
+
+@rota("GET", "/api/baixas")
+def baixas(loja, q, corpo):
+    return loja.listar_baixas(q.get("cliente_id") or None, q.get("inicio") or None, q.get("fim") or None)
+
+
+@rota("GET", r"/api/baixas/(?P<bid>\d+)")
+def obter_baixa(loja, q, corpo, bid):
+    return loja.obter_baixa(int(bid))
+
+
+@rota("POST", r"/api/baixas/(?P<bid>\d+)/estornar")
+def estornar_baixa(loja, q, corpo, bid):
+    return loja.estornar_baixa(int(bid), corpo.get("motivo"))
 
 
 @rota("GET", "/api/vendas")
@@ -259,6 +284,11 @@ def rel_vendas(loja, q, corpo):
     return loja.relatorio_vendas(q.get("inicio") or None, q.get("fim") or None)
 
 
+@rota("GET", "/api/relatorios/vendas-por-dia")
+def rel_vendas_dia(loja, q, corpo):
+    return loja.vendas_por_dia(q.get("dias", 14))
+
+
 @rota("GET", "/api/relatorios/mais-vendidos")
 def rel_mais_vendidos(loja, q, corpo):
     return loja.mais_vendidos(q.get("inicio") or None, q.get("fim") or None)
@@ -359,9 +389,15 @@ class Manipulador(BaseHTTPRequestHandler):
         self._api("PUT")
 
 
+class Servidor(ThreadingHTTPServer):
+    # vários caixas e telas abertas ao mesmo tempo: a fila padrão (5 conexões) recusaria pedidos em picos
+    request_queue_size = 128
+    daemon_threads = True
+
+
 def criar_servidor(loja, host="127.0.0.1", porta=8080, silencioso=False):
     manipulador = type("ManipuladorLoja", (Manipulador,), {"loja": loja, "silencioso": silencioso})
-    return ThreadingHTTPServer((host, porta), manipulador)
+    return Servidor((host, porta), manipulador)
 
 
 def main():

@@ -60,7 +60,7 @@ class Simulacao(unittest.TestCase):
             divida[c["id"]] = 0
 
         estado = {"dinheiro": 0, "caixa_aberto": False, "faturado": 0, "a_pagar": 0}
-        vendas = []
+        vendas, baixas = [], []
         contadores = {"ok": 0, "recusada": 0}
 
         def abrir():
@@ -208,6 +208,54 @@ class Simulacao(unittest.TestCase):
                 estado["dinheiro"] += valor
             return True
 
+        def op_baixa_escolhida():
+            c = rnd.choice(clientes)
+            abertas = loja.listar_contas_receber(c["id"], status="ABERTA")
+            if not abertas:
+                return False
+            escolhidas = rnd.sample(abertas, rnd.randint(1, len(abertas)))
+            disponivel = sum(x["restante"] for x in escolhidas)
+            valor = disponivel if rnd.random() < 0.4 else rnd.randint(1, disponivel + 300)
+            forma = rnd.choice(["DINHEIRO", "PIX", "CREDITO"])
+            dados = {"contas": [x["id"] for x in escolhidas], "valor": reais(valor), "forma": forma}
+            entregue = valor
+            if forma == "DINHEIRO" and rnd.random() < 0.5:
+                entregue = valor + rnd.randint(0, 5000)
+                dados["valor_recebido"] = reais(entregue)
+            try:
+                b = loja.receber_conta_cliente(c["id"], dados)
+            except LojaError:
+                self.assertTrue(valor > disponivel or not estado["caixa_aberto"])
+                return False
+            self.assertLessEqual(valor, disponivel)
+            self.assertEqual((b["valor"], b["troco"]), (valor, entregue - valor))
+            self.assertEqual(b["saldo_apos"], divida[c["id"]] - valor)
+            # só as parcelas escolhidas podem ter sido pagas
+            self.assertTrue({i["conta_id"] for i in b["itens"]} <= {x["id"] for x in escolhidas})
+            divida[c["id"]] -= valor
+            if forma == "DINHEIRO":
+                estado["dinheiro"] += valor
+            baixas.append(b["id"])
+            return True
+
+        def op_estorno():
+            if not baixas:
+                return False
+            b = loja.obter_baixa(rnd.choice(baixas))
+            try:
+                loja.estornar_baixa(b["id"], "simulação")
+            except LojaError:
+                vendas_b = {i["venda_id"] for i in b["itens"]}
+                self.assertTrue(b["status"] != "ATIVA" or not estado["caixa_aberto"]
+                                or (b["forma"] == "DINHEIRO" and estado["dinheiro"] < b["valor"])
+                                or any(loja.obter_venda(x)["devolucoes"] for x in vendas_b))
+                return False
+            self.assertEqual(b["status"], "ATIVA")
+            divida[b["cliente_id"]] += b["valor"]
+            if b["forma"] == "DINHEIRO":
+                estado["dinheiro"] -= b["valor"]
+            return True
+
         def op_compra():
             itens, total = [], 0
             for p in rnd.sample(produtos, rnd.randint(1, 3)):
@@ -274,7 +322,8 @@ class Simulacao(unittest.TestCase):
                 abrir()
             return True
 
-        operacoes = [(op_venda, 40), (op_cancelar, 4), (op_devolucao, 6), (op_receber, 12), (op_compra, 5),
+        operacoes = [(op_venda, 40), (op_cancelar, 4), (op_devolucao, 6), (op_receber, 8), (op_baixa_escolhida, 8),
+                     (op_estorno, 2), (op_compra, 5),
                      (op_pagar_conta, 5), (op_ajuste, 3), (op_perda, 3), (op_sangria, 4), (op_virar_dia, 4)]
         funcoes = [f for f, _ in operacoes]
         pesos = [w for _, w in operacoes]

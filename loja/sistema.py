@@ -465,14 +465,20 @@ class Loja:
         c["credito_disponivel"] = max(0, c["limite_credito"] - c["saldo_devedor"])
         return c
 
-    def listar_clientes(self, busca="", apenas_ativos=False):
+    def listar_clientes(self, busca="", apenas_ativos=False, devendo=False):
         termo = f"%{busca.strip()}%"
         sql = ("SELECT c.*, IFNULL((SELECT SUM(valor - valor_pago) FROM contas_receber r"
-               " WHERE r.cliente_id = c.id AND r.status = 'ABERTA'), 0) AS saldo_devedor"
+               " WHERE r.cliente_id = c.id AND r.status = 'ABERTA'), 0) AS saldo_devedor,"
+               " IFNULL((SELECT SUM(valor - valor_pago) FROM contas_receber r WHERE r.cliente_id = c.id"
+               " AND r.status = 'ABERTA' AND r.vencimento < ?), 0) AS valor_vencido"
                " FROM clientes c WHERE (c.nome LIKE ? OR IFNULL(c.documento,'') LIKE ? OR c.telefone LIKE ?)")
         if apenas_ativos:
             sql += " AND c.ativo = 1"
-        return self._todos(sql + " ORDER BY c.nome", termo, termo, termo)
+        args = (self.hoje().isoformat(), termo, termo, termo)
+        if devendo:
+            return self._todos(f"SELECT * FROM ({sql}) WHERE saldo_devedor > 0"
+                               " ORDER BY valor_vencido DESC, saldo_devedor DESC, nome", *args)
+        return self._todos(sql + " ORDER BY c.nome", *args)
 
     def extrato_cliente(self, cid):
         c = self.obter_cliente(cid)
@@ -482,6 +488,7 @@ class Loja:
         c["recebimentos"] = self._todos(
             "SELECT r.*, c.parcela, c.total_parcelas, c.venda_id FROM recebimentos r"
             " JOIN contas_receber c ON c.id = r.conta_id WHERE c.cliente_id = ? ORDER BY r.id DESC", cid)
+        c["baixas"] = self.listar_baixas(cliente_id=cid)
         return c
 
     # ------------------------------------------------------------------ caixa
@@ -920,51 +927,172 @@ class Loja:
             c["vencida"] = c["status"] == "ABERTA" and c["vencimento"] < hoje
         return contas
 
-    def receber_parcela(self, conta_id, valor, forma="DINHEIRO"):
-        forma = str(forma or "").strip().upper()
+    def debitos_cliente(self, cliente_id):
+        """Compras do cliente que ainda têm saldo em aberto, com os produtos e as parcelas de cada uma."""
+        self.obter_cliente(cliente_id)
+        hoje = self.hoje().isoformat()
+        compras = {}
+        for c in self._todos(
+                "SELECT *, valor - valor_pago AS restante FROM contas_receber WHERE cliente_id = ?"
+                " AND status = 'ABERTA' ORDER BY vencimento, parcela, id", cliente_id):
+            c["vencida"] = c["vencimento"] < hoje
+            compra = compras.get(c["venda_id"])
+            if compra is None:
+                venda = self._um("SELECT data, total FROM vendas WHERE id = ?", c["venda_id"]) or {}
+                compra = compras[c["venda_id"]] = {
+                    "venda_id": c["venda_id"], "data": venda.get("data", c["emissao"]), "total": venda.get("total", 0),
+                    "produtos": self._todos(
+                        "SELECT descricao, unidade, quantidade - quantidade_devolvida AS quantidade,"
+                        " total_liquido - valor_devolvido AS total FROM venda_itens WHERE venda_id = ?"
+                        " AND quantidade > quantidade_devolvida ORDER BY id", c["venda_id"]),
+                    "parcelas": [], "restante": 0, "vencido": 0}
+            compra["parcelas"].append(c)
+            compra["restante"] += c["restante"]
+            if c["vencida"]:
+                compra["vencido"] += c["restante"]
+        return sorted(compras.values(), key=lambda x: (x["data"], x["venda_id"] or 0))
+
+    def _aplicar_recebimento(self, conta, valor, forma, baixa_id, sessao_id):
+        self._lancar_caixa(
+            "RECEBIMENTO", forma, valor,
+            f"Parcela {conta['parcela']}/{conta['total_parcelas']} da venda #{conta['venda_id']}",
+            f"conta_receber:{conta['id']}")
+        self._inserir("INSERT INTO recebimentos (conta_id, data, valor, forma, caixa_sessao_id, baixa_id)"
+                      " VALUES (?, ?, ?, ?, ?, ?)", conta["id"], self.agora(), valor, forma, sessao_id, baixa_id)
+        pago = conta["valor_pago"] + valor
+        self.conn.execute("UPDATE contas_receber SET valor_pago = ?, status = ? WHERE id = ?",
+                          (pago, "PAGA" if pago == conta["valor"] else "ABERTA", conta["id"]))
+
+    def receber_conta_cliente(self, cliente_id, dados):
+        """Dá baixa na conta do cliente, toda ou em parte.
+
+        dados:
+          contas          parcelas escolhidas (vazio = todas as que estão em aberto)
+          valor           quanto abater da dívida (vazio = o total escolhido; menor = baixa parcial,
+                          quitando primeiro as parcelas que vencem antes)
+          forma           DINHEIRO, PIX, DEBITO ou CREDITO
+          valor_recebido  quanto o cliente entregou em dinheiro (calcula o troco)
+        """
+        forma = str(dados.get("forma") or "DINHEIRO").strip().upper()
         if forma not in FORMAS_RECEBIMENTO:
             raise LojaError(f"Forma de recebimento inválida: {forma}")
-        valor = v.centavos(valor, "Valor recebido", positivo=True)
         with self._transacao():
-            conta = self._um("SELECT * FROM contas_receber WHERE id = ?", conta_id)
-            if not conta:
-                raise NaoEncontrado(f"Parcela {conta_id} não encontrada")
-            if conta["status"] != "ABERTA":
-                raise LojaError("Esta parcela não está em aberto")
-            restante = conta["valor"] - conta["valor_pago"]
-            if valor > restante:
-                raise LojaError(f"Valor maior que o saldo da parcela ({v.formatar_reais(restante)})")
-            sid = self._lancar_caixa(
-                "RECEBIMENTO", forma, valor,
-                f"Parcela {conta['parcela']}/{conta['total_parcelas']} da venda #{conta['venda_id']}",
-                f"conta_receber:{conta_id}")
-            self._inserir("INSERT INTO recebimentos (conta_id, data, valor, forma, caixa_sessao_id)"
-                          " VALUES (?, ?, ?, ?, ?)", conta_id, self.agora(), valor, forma, sid)
-            pago = conta["valor_pago"] + valor
-            self.conn.execute("UPDATE contas_receber SET valor_pago = ?, status = ? WHERE id = ?",
-                              (pago, "PAGA" if pago == conta["valor"] else "ABERTA", conta_id))
+            self.obter_cliente(cliente_id)
+            sessao = self._sessao_aberta()
+            abertas = self._todos(
+                "SELECT * FROM contas_receber WHERE cliente_id = ? AND status = 'ABERTA'"
+                " ORDER BY vencimento, parcela, id", cliente_id)
+            if not abertas:
+                raise LojaError("Este cliente não tem contas em aberto")
+            escolhidas = dados.get("contas")
+            if escolhidas not in (None, "", []):
+                if not isinstance(escolhidas, list):
+                    raise LojaError("Parcelas escolhidas: formato inválido")
+                ids = {_int(x, "Parcela", 1) for x in escolhidas}
+                fora = ids - {c["id"] for c in abertas}
+                if fora:
+                    raise LojaError(f"Parcela(s) {', '.join(map(str, sorted(fora)))} não estão em aberto para este cliente")
+                abertas = [c for c in abertas if c["id"] in ids]
+            disponivel = sum(c["valor"] - c["valor_pago"] for c in abertas)
+            if dados.get("valor") in (None, ""):
+                valor = disponivel
+            else:
+                valor = v.centavos(dados["valor"], "Valor a pagar", positivo=True)
+            if valor > disponivel:
+                raise LojaError(f"Valor maior que o total escolhido ({v.formatar_reais(disponivel)})")
+            recebido = valor
+            if dados.get("valor_recebido") not in (None, ""):
+                recebido = v.centavos(dados["valor_recebido"], "Valor entregue pelo cliente")
+                if recebido < valor:
+                    raise LojaError(f"O valor entregue ({v.formatar_reais(recebido)}) é menor que o valor a pagar "
+                                    f"({v.formatar_reais(valor)})")
+                if recebido > valor and forma != "DINHEIRO":
+                    raise LojaError("Troco só é possível em dinheiro")
+            saldo = self._saldo_devedor(cliente_id)
+            bid = self._inserir(
+                "INSERT INTO baixas (cliente_id, data, valor, forma, valor_recebido, troco, saldo_anterior, saldo_apos,"
+                " caixa_sessao_id, observacao, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ATIVA')",
+                cliente_id, self.agora(), valor, forma, recebido, recebido - valor, saldo, saldo - valor,
+                sessao["id"], _txt(dados, "observacao"))
+            restante = valor
+            for conta in abertas:
+                if restante <= 0:
+                    break
+                parte = min(restante, conta["valor"] - conta["valor_pago"])
+                self._aplicar_recebimento(conta, parte, forma, bid, sessao["id"])
+                restante -= parte
+        return self.obter_baixa(bid)
+
+    def obter_baixa(self, bid):
+        b = self._um("SELECT b.*, c.nome AS cliente, c.documento AS cliente_documento FROM baixas b"
+                     " JOIN clientes c ON c.id = b.cliente_id WHERE b.id = ?", bid)
+        if not b:
+            raise NaoEncontrado(f"Baixa {bid} não encontrada")
+        b["itens"] = self._todos(
+            "SELECT r.id, r.valor, r.estornado, c.id AS conta_id, c.venda_id, c.parcela, c.total_parcelas,"
+            " c.vencimento, c.valor AS valor_parcela, c.valor_pago, c.status, c.valor - c.valor_pago AS restante"
+            " FROM recebimentos r JOIN contas_receber c ON c.id = r.conta_id WHERE r.baixa_id = ? ORDER BY r.id", bid)
+        return b
+
+    def listar_baixas(self, cliente_id=None, inicio=None, fim=None, limite=300):
+        sql = "SELECT b.*, c.nome AS cliente FROM baixas b JOIN clientes c ON c.id = b.cliente_id WHERE 1=1"
+        args = []
+        if cliente_id:
+            sql += " AND b.cliente_id = ?"
+            args.append(cliente_id)
+        if inicio:
+            sql += " AND date(b.data) >= ?"
+            args.append(v.data_iso(inicio).isoformat())
+        if fim:
+            sql += " AND date(b.data) <= ?"
+            args.append(v.data_iso(fim).isoformat())
+        sql += " ORDER BY b.id DESC LIMIT ?"
+        args.append(_int(limite, "Limite", 1, 100000))
+        return self._todos(sql, *args)
+
+    def estornar_baixa(self, bid, motivo):
+        """Desfaz uma baixa lançada por engano: a dívida volta e o valor sai do caixa."""
+        motivo = str(motivo or "").strip()
+        if not motivo:
+            raise LojaError("Informe o motivo do estorno")
+        with self._transacao():
+            b = self.obter_baixa(bid)
+            if b["status"] != "ATIVA":
+                raise LojaError("Esta baixa já foi estornada")
+            vendas = {i["venda_id"] for i in b["itens"] if i["venda_id"]}
+            for vid in vendas:
+                if self._um("SELECT id FROM devolucoes WHERE venda_id = ? AND data >= ?", vid, b["data"]):
+                    raise LojaError(f"A venda #{vid} teve devolução depois desta baixa; o estorno não é possível")
+            self._sessao_aberta()
+            for i in b["itens"]:
+                self._lancar_caixa("ESTORNO_RECEBIMENTO", b["forma"], -i["valor"],
+                                   f"Estorno da baixa #{bid} ({motivo})", f"conta_receber:{i['conta_id']}")
+                self.conn.execute("UPDATE recebimentos SET estornado = 1 WHERE id = ?", (i["id"],))
+                self.conn.execute(
+                    "UPDATE contas_receber SET valor_pago = valor_pago - ?, status = 'ABERTA' WHERE id = ?",
+                    (i["valor"], i["conta_id"]))
+            self.conn.execute("UPDATE baixas SET status = 'ESTORNADA', estornada_em = ?, motivo_estorno = ? WHERE id = ?",
+                              (self.agora(), motivo, bid))
+        return self.obter_baixa(bid)
+
+    def receber_parcela(self, conta_id, valor, forma="DINHEIRO"):
+        """Baixa de uma única parcela (atalho para receber_conta_cliente)."""
+        conta = self._um("SELECT * FROM contas_receber WHERE id = ?", conta_id)
+        if not conta:
+            raise NaoEncontrado(f"Parcela {conta_id} não encontrada")
+        if conta["status"] != "ABERTA":
+            raise LojaError("Esta parcela não está em aberto")
+        restante = conta["valor"] - conta["valor_pago"]
+        if v.centavos(valor, "Valor recebido", positivo=True) > restante:
+            raise LojaError(f"Valor maior que o saldo da parcela ({v.formatar_reais(restante)})")
+        self.receber_conta_cliente(conta["cliente_id"], {"contas": [conta_id], "valor": valor, "forma": forma})
         return self._um("SELECT *, valor - valor_pago AS restante FROM contas_receber WHERE id = ?", conta_id)
 
     def receber_do_cliente(self, cliente_id, valor, forma="DINHEIRO"):
         """Recebe um valor do cliente e quita as parcelas mais antigas primeiro."""
-        valor = v.centavos(valor, "Valor recebido", positivo=True)
-        with self._transacao():
-            self.obter_cliente(cliente_id)
-            divida = self._saldo_devedor(cliente_id)
-            if valor > divida:
-                raise LojaError(f"Valor maior que o saldo devedor do cliente ({v.formatar_reais(divida)})")
-            restante = valor
-            quitadas = []
-            for conta in self._todos(
-                    "SELECT * FROM contas_receber WHERE cliente_id = ? AND status = 'ABERTA'"
-                    " ORDER BY vencimento, id", cliente_id):
-                if restante <= 0:
-                    break
-                parte = min(restante, conta["valor"] - conta["valor_pago"])
-                self.receber_parcela(conta["id"], Decimal(parte) / 100, forma)
-                quitadas.append({"conta_id": conta["id"], "valor": parte})
-                restante -= parte
-        return {"recebido": valor, "parcelas": quitadas, "cliente": self.obter_cliente(cliente_id)}
+        b = self.receber_conta_cliente(cliente_id, {"valor": valor, "forma": forma})
+        return {"recebido": b["valor"], "parcelas": [{"conta_id": i["conta_id"], "valor": i["valor"]} for i in b["itens"]],
+                "cliente": self.obter_cliente(cliente_id), "baixa": b}
 
     # --------------------------------------------------------- contas a pagar
     def lancar_conta_pagar(self, dados):
@@ -1059,8 +1187,25 @@ class Loja:
                 f"SELECT p.forma, SUM(p.valor - p.troco) AS valor FROM venda_pagamentos p"
                 f" JOIN vendas v ON v.id = p.venda_id WHERE {filtro} GROUP BY p.forma ORDER BY p.forma", *periodo)}
         r["recebimentos_crediario"] = self._escalar(
-            "SELECT SUM(valor) FROM recebimentos WHERE date(data) BETWEEN ? AND ?", *periodo)
+            "SELECT SUM(valor) FROM recebimentos WHERE estornado = 0 AND date(data) BETWEEN ? AND ?", *periodo)
         return r
+
+    def vendas_por_dia(self, dias=14):
+        """Faturamento líquido (vendas menos devoluções) de cada um dos últimos `dias` dias."""
+        dias = _int(dias, "Dias", 1, 366)
+        fim = self.hoje()
+        inicio = fim - datetime.timedelta(days=dias - 1)
+        por_dia = {r["dia"]: r for r in self._todos(
+            "SELECT date(v.data) AS dia, COUNT(*) AS quantidade,"
+            " SUM(v.total - IFNULL((SELECT SUM(valor) FROM devolucoes d WHERE d.venda_id = v.id), 0)) AS total"
+            " FROM vendas v WHERE v.status = 'CONCLUIDA' AND date(v.data) BETWEEN ? AND ? GROUP BY dia",
+            inicio.isoformat(), fim.isoformat())}
+        serie = []
+        for n in range(dias):
+            dia = (inicio + datetime.timedelta(days=n)).isoformat()
+            r = por_dia.get(dia, {})
+            serie.append({"data": dia, "quantidade": r.get("quantidade", 0), "total": r.get("total", 0)})
+        return serie
 
     def mais_vendidos(self, inicio=None, fim=None, limite=20):
         inicio = v.data_iso(inicio or self.hoje() - datetime.timedelta(days=30))
@@ -1103,6 +1248,15 @@ class Loja:
                 (self.hoje() + datetime.timedelta(days=7)).isoformat()),
             "orcamentos_abertos": self._escalar(
                 "SELECT COUNT(*) FROM orcamentos WHERE status = 'ABERTO' AND validade >= ?", hoje),
+            "vendas_por_dia": self.vendas_por_dia(14),
+            "clientes_em_atraso": self._todos(
+                "SELECT c.id, c.nome, c.telefone, SUM(r.valor - r.valor_pago) AS vencido, MIN(r.vencimento) AS desde"
+                " FROM contas_receber r JOIN clientes c ON c.id = r.cliente_id"
+                " WHERE r.status = 'ABERTA' AND r.vencimento < ? GROUP BY c.id ORDER BY vencido DESC LIMIT 8", hoje),
+            "contas_pagar_proximas": self._todos(
+                "SELECT p.id, p.descricao, p.vencimento, p.valor - p.valor_pago AS restante FROM contas_pagar p"
+                " WHERE p.status = 'ABERTA' AND p.vencimento <= ? ORDER BY p.vencimento LIMIT 8",
+                (self.hoje() + datetime.timedelta(days=7)).isoformat()),
         }
 
     # ------------------------------------------------------------- auditoria
@@ -1167,8 +1321,8 @@ class Loja:
                    " LEFT JOIN devolucao_itens d ON d.venda_item_id = i.id GROUP BY i.id"):
             if (i["q"], i["val"]) != (i["quantidade_devolvida"], i["valor_devolvido"]):
                 problemas.append(f"Item de venda {i['id']}: devolução registrada não confere")
-        for c in q("SELECT c.*, IFNULL((SELECT SUM(valor) FROM recebimentos WHERE conta_id = c.id), 0) AS soma"
-                   " FROM contas_receber c"):
+        for c in q("SELECT c.*, IFNULL((SELECT SUM(valor) FROM recebimentos WHERE conta_id = c.id"
+                   " AND estornado = 0), 0) AS soma FROM contas_receber c"):
             if c["soma"] != c["valor_pago"]:
                 problemas.append(f"Conta a receber {c['id']}: valor pago não bate com os recebimentos")
             if c["status"] == "ABERTA" and c["valor_pago"] >= c["valor"]:
@@ -1192,9 +1346,17 @@ class Loja:
         for s in q("SELECT * FROM caixa_sessoes"):
             if self._saldo_dinheiro(s) < 0:
                 problemas.append(f"Caixa {s['id']}: saldo em dinheiro negativo")
-        for r in q("SELECT r.id, r.valor, r.conta_id, IFNULL((SELECT SUM(valor) FROM caixa_movimentos"
-                   " WHERE referencia = 'conta_receber:' || r.conta_id), 0) AS caixa,"
-                   " (SELECT SUM(valor) FROM recebimentos WHERE conta_id = r.conta_id) AS total FROM recebimentos r"):
+        for r in q("SELECT c.id AS conta_id, IFNULL((SELECT SUM(valor) FROM caixa_movimentos"
+                   " WHERE referencia = 'conta_receber:' || c.id), 0) AS caixa,"
+                   " IFNULL((SELECT SUM(valor) FROM recebimentos WHERE conta_id = c.id AND estornado = 0), 0) AS total"
+                   " FROM contas_receber c"):
             if r["caixa"] != r["total"]:
                 problemas.append(f"Recebimento da conta {r['conta_id']}: valor não entrou corretamente no caixa")
+        for b in q("SELECT b.*, IFNULL((SELECT SUM(valor) FROM recebimentos WHERE baixa_id = b.id), 0) AS soma,"
+                   " (SELECT COUNT(*) FROM recebimentos WHERE baixa_id = b.id AND estornado = 1) AS estornados,"
+                   " (SELECT COUNT(*) FROM recebimentos WHERE baixa_id = b.id) AS itens FROM baixas b"):
+            if b["soma"] != b["valor"]:
+                problemas.append(f"Baixa {b['id']}: parcelas quitadas não somam o valor da baixa")
+            if (b["status"] == "ATIVA" and b["estornados"]) or (b["status"] == "ESTORNADA" and b["estornados"] != b["itens"]):
+                problemas.append(f"Baixa {b['id']}: situação do estorno não confere")
         return problemas

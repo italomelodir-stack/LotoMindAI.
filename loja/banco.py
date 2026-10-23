@@ -167,13 +167,36 @@ CREATE TABLE IF NOT EXISTS contas_receber (
 );
 CREATE INDEX IF NOT EXISTS ix_receber_cliente ON contas_receber(cliente_id);
 
+-- Cada vez que o cliente vem pagar a conta é uma "baixa"; ela pode quitar várias parcelas.
+CREATE TABLE IF NOT EXISTS baixas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cliente_id INTEGER NOT NULL REFERENCES clientes(id),
+    data TEXT NOT NULL,
+    valor INTEGER NOT NULL CHECK (valor > 0),
+    forma TEXT NOT NULL,
+    valor_recebido INTEGER NOT NULL,
+    troco INTEGER NOT NULL DEFAULT 0 CHECK (troco >= 0),
+    saldo_anterior INTEGER NOT NULL,
+    saldo_apos INTEGER NOT NULL CHECK (saldo_apos >= 0),
+    caixa_sessao_id INTEGER REFERENCES caixa_sessoes(id),
+    observacao TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ATIVA' CHECK (status IN ('ATIVA', 'ESTORNADA')),
+    estornada_em TEXT,
+    motivo_estorno TEXT NOT NULL DEFAULT '',
+    CHECK (valor_recebido = valor + troco),
+    CHECK (saldo_apos = saldo_anterior - valor)
+);
+CREATE INDEX IF NOT EXISTS ix_baixas_cliente ON baixas(cliente_id);
+
 CREATE TABLE IF NOT EXISTS recebimentos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conta_id INTEGER NOT NULL REFERENCES contas_receber(id),
     data TEXT NOT NULL,
     valor INTEGER NOT NULL CHECK (valor > 0),
     forma TEXT NOT NULL,
-    caixa_sessao_id INTEGER REFERENCES caixa_sessoes(id)
+    caixa_sessao_id INTEGER REFERENCES caixa_sessoes(id),
+    baixa_id INTEGER REFERENCES baixas(id),
+    estornado INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS devolucoes (
@@ -238,5 +261,15 @@ CREATE TABLE IF NOT EXISTS pagamentos_contas (
 """
 
 
+def _colunas(conn, tabela):
+    return {linha[1] for linha in conn.execute(f"PRAGMA table_info({tabela})")}
+
+
 def criar_esquema(conn):
     conn.executescript(ESQUEMA)
+    # atualiza bancos criados por versões anteriores do sistema
+    if "baixa_id" not in _colunas(conn, "recebimentos"):
+        conn.execute("ALTER TABLE recebimentos ADD COLUMN baixa_id INTEGER REFERENCES baixas(id)")
+    if "estornado" not in _colunas(conn, "recebimentos"):
+        conn.execute("ALTER TABLE recebimentos ADD COLUMN estornado INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_recebimentos_baixa ON recebimentos(baixa_id)")

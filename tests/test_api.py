@@ -61,6 +61,25 @@ class TestAPI(unittest.TestCase):
         self.assertEqual(c("GET", f"/api/clientes/{cli['id']}")["saldo_devedor"], 12450)
         c("POST", f"/api/clientes/{cli['id']}/receber", {"valor": "124,50", "forma": "DINHEIRO"})
 
+        # baixa parcial escolhendo a parcela, com troco, e estorno
+        v4 = c("POST", "/api/vendas", {"itens": [{"produto_id": p["id"], "quantidade": "4"}], "cliente_id": cli["id"],
+                                       "pagamentos": [{"forma": "CREDIARIO", "valor": "99,60"}],
+                                       "crediario": {"parcelas": 2}})
+        deb = c("GET", f"/api/clientes/{cli['id']}/debitos")
+        self.assertEqual(deb["cliente"]["saldo_devedor"], 9960)
+        self.assertEqual(deb["compras"][0]["produtos"][0]["quantidade"], 4000)
+        b = c("POST", f"/api/clientes/{cli['id']}/baixa", {"contas": [v4["parcelas"][1]["id"]], "valor": "30",
+                                                           "valor_recebido": "50", "forma": "DINHEIRO"})
+        self.assertEqual((b["valor"], b["troco"], b["saldo_apos"]), (3000, 2000, 6960))
+        self.assertEqual(c("GET", f"/api/baixas/{b['id']}")["itens"][0]["conta_id"], v4["parcelas"][1]["id"])
+        r = c("POST", f"/api/clientes/{cli['id']}/baixa", {"valor": "999", "forma": "PIX"}, esperado=400)
+        self.assertIn("maior que o total", r["erro"])
+        c("POST", f"/api/baixas/{b['id']}/estornar", {"motivo": "teste"})
+        self.assertEqual(c("GET", f"/api/clientes/{cli['id']}")["saldo_devedor"], 9960)
+        self.assertEqual(len(c("GET", f"/api/baixas?cliente_id={cli['id']}")), 3)
+        c("POST", f"/api/vendas/{v4['id']}/cancelar", {"motivo": "teste"})
+        self.assertEqual(len(c("GET", "/api/relatorios/vendas-por-dia?dias=7")), 7)
+
         d = c("POST", f"/api/vendas/{v['id']}/devolucao",
               {"itens": [{"item_id": v["itens"][0]["id"], "quantidade": "1"}], "forma_reembolso": "DINHEIRO"})
         self.assertEqual(d["valor"], 2490)
@@ -117,7 +136,7 @@ class TestAPI(unittest.TestCase):
             urllib.request.urlopen(self.url + "/%2e%2e/sistema.py")
 
     def test_vendas_simultaneas_nao_vendem_alem_do_estoque(self):
-        """Vários caixas vendendo o último estoque ao mesmo tempo: só pode vender o que existe."""
+        """40 pedidos ao mesmo tempo disputando as últimas 5 unidades: só pode vender o que existe."""
         try:
             self.chamar("POST", "/api/caixa/abrir", {"valor_inicial": "0"})
         except AssertionError:
@@ -136,14 +155,17 @@ class TestAPI(unittest.TestCase):
                     resultados.append(r.status)
             except urllib.error.HTTPError as e:
                 resultados.append(e.code)
+            except OSError as e:  # conexão recusada/derrubada
+                resultados.append(repr(e))
 
-        threads = [threading.Thread(target=comprar) for _ in range(20)]
+        threads = [threading.Thread(target=comprar) for _ in range(40)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        self.assertEqual(len(resultados), 40)
         self.assertEqual(resultados.count(200), 5)
-        self.assertEqual(resultados.count(400), 15)
+        self.assertEqual(resultados.count(400), 35)
         self.assertEqual(self.chamar("GET", f"/api/produtos/{p['id']}")["estoque"], 0)
         self.assertTrue(self.chamar("GET", "/api/integridade")["ok"])
 

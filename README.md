@@ -21,7 +21,24 @@ python -m loja --host 0.0.0.0                   # libera acesso de outros comput
 O nome que aparece no topo e nos comprovantes é definido pela variável de ambiente `LOJA_NOME`
 (ex.: `set LOJA_NOME=Casa do Construtor` no Windows antes de iniciar).
 
-**Primeiro dia:** abra o caixa (menu *Caixa*), cadastre fornecedores, produtos e clientes, e comece a vender em *Vender (PDV)*.
+**Primeiro dia:** abra o caixa (menu *Caixa*), cadastre fornecedores, produtos e clientes, e comece a vender em *Vender*.
+
+### Interface
+
+- Visual moderno, com **tema claro e escuro** (botão da lua/sol no topo; a escolha fica lembrada).
+- Funciona também em **tablet e celular** (o menu vira um botão ☰).
+- **Atalhos de teclado** para o balcão:
+
+| Tecla | O que faz |
+|---|---|
+| **F2** | Nova venda / ir para a busca de produto |
+| **F3** | Receber de cliente |
+| **F4** | Finalizar a venda |
+| **F6** | Escolher o cliente na venda |
+| **F8** | Ir para o desconto |
+| **Enter** | Na busca de produto: adiciona (aceita leitor de código de barras) |
+| **↑ ↓** | Navegar nas sugestões de busca |
+| **Esc** | Fechar janela |
 
 ## Funções
 
@@ -32,10 +49,12 @@ O nome que aparece no topo e nos comprovantes é definido pela variável de ambi
 | **Vendas** | Histórico por período, reimpressão, cancelamento (devolve estoque e estorna o caixa) e **devolução parcial** de itens |
 | **Produtos** | Código, código de barras, categoria, unidade (UN, SC, M, M², M³, KG, L, milheiro, barra, rolo, lata...), custo, preço, margem, estoque mínimo, localização no depósito |
 | **Estoque** | Entrada de mercadoria (soma estoque e recalcula **custo médio**), inventário (ajuste pela contagem), registro de perdas/quebras, histórico de toda movimentação, alerta de estoque baixo |
-| **Clientes** | Cadastro com CPF/CNPJ validado, limite de crediário, extrato com compras, parcelas e pagamentos |
-| **Contas a receber** | Parcelas do crediário, pagamento parcial, recebimento de um valor que quita as parcelas mais antigas, lista de vencidas |
+| **Receber de cliente** | Dá baixa na conta do crediário: mostra as compras em aberto com os produtos e as parcelas; você marca **tudo, só algumas compras ou só uma parcela**, digita **quanto o cliente está pagando** (tudo, metade, só o vencido ou qualquer valor) e o sistema mostra antes de confirmar como a conta vai ficar. Calcula o troco, imprime comprovante com o saldo que ficou devendo e permite **estornar** um pagamento lançado errado |
+| **Clientes** | Cadastro com CPF/CNPJ validado, limite de crediário, extrato com compras e pagamentos |
+| **Contas a receber** | Todas as parcelas do crediário, filtro de vencidas e botão "Receber" que já abre a baixa com aquela parcela marcada |
 | **Contas a pagar** | Geradas automaticamente pelas compras (parceladas) ou lançadas à mão (aluguel, energia...); pagamento parcial; pagamento com dinheiro do caixa |
 | **Caixa** | Abertura com fundo de troco, sangria, suprimento, totais por forma de pagamento e fechamento com conferência (mostra sobra ou falta) |
+| **Painel** | Vendas e lucro do dia, dinheiro no caixa, gráfico das vendas dos últimos 14 dias, clientes com conta vencida, estoque baixo e contas a pagar da semana |
 | **Relatórios** | Faturamento bruto/líquido, descontos, devoluções, custo das mercadorias, lucro bruto, ticket médio, vendas por forma de pagamento, produtos mais vendidos, valor do estoque |
 | **Segurança dos dados** | Botão "Conferir consistência" (confere estoque × movimentações, vendas × pagamentos × parcelas × caixa) e botão de backup |
 
@@ -48,7 +67,9 @@ O nome que aparece no topo e nos comprovantes é definido pela variável de ambi
   rateado entre os itens sempre somam exatamente o total.
 - Crediário só para cliente cadastrado, dentro do limite e **sem parcelas em atraso**.
 - Na devolução, o valor primeiro abate o que o cliente ainda deve daquela venda; só o que sobrar é reembolsado.
-- Não deixa receber mais do que a parcela vale, nem tirar do caixa mais dinheiro do que tem nele.
+- Não deixa receber mais do que o cliente deve nas parcelas escolhidas, nem tirar do caixa mais dinheiro do que tem nele.
+- Pagamento parcial abate primeiro a parcela que vence antes. No dinheiro, só o valor da conta entra no caixa (o troco não).
+- O estorno de um pagamento devolve a dívida ao cliente e tira o valor do caixa; não é permitido se a compra teve devolução depois.
 - Venda e recebimento exigem caixa aberto.
 - O banco de dados também recusa estoque negativo, pagamento acima do devido etc., mesmo que alguém mexa por fora.
 
@@ -63,17 +84,22 @@ e copie essa pasta para um pen drive ou nuvem regularmente.
 python -m unittest discover -s tests -t . -v
 ```
 
-São 103 testes automáticos (com centenas de casos dentro deles), incluindo:
+São 122 testes automáticos (com centenas de casos dentro deles), incluindo:
 
 - **Valores:** conversão de "1.234,56", arredondamento, rateio de centavos, validação de CPF/CNPJ.
 - **Estoque:** baixa na venda, bloqueio de estoque insuficiente, desfazer tudo se um item falhar, custo médio, inventário, perdas.
 - **Vendas:** troco, pagamento misto, descontos, crediário, limite de crédito, cliente em atraso, cancelamento, devoluções parciais.
 - **Financeiro:** pagamento parcial e total de parcelas, contas a pagar, abertura/sangria/fechamento de caixa.
-- **Simulação:** 9.000 operações aleatórias (vendas, erros propositais, cancelamentos, devoluções, recebimentos, compras,
+- **Baixa na conta do cliente:** quitar tudo, só uma compra, só parte de uma compra, metade do valor, troco, valores
+  inválidos, parcela de outro cliente, caixa fechado, estorno, e atualização automática de bancos de versões anteriores.
+- **Simulação:** 9.000 operações aleatórias (vendas, erros propositais, cancelamentos, devoluções, recebimentos,
+  baixas escolhendo parcelas, estornos, compras,
   inventários, sangrias, vários dias) comparando o sistema, depois de cada operação, com um controle paralelo
   calculado de forma independente: estoque de cada produto, dinheiro na gaveta e dívida de cada cliente.
-- **API:** o servidor web de verdade, incluindo 20 vendas simultâneas disputando 5 unidades.
-- **Interface:** abre o sistema num navegador real e faz o dia de trabalho completo clicando nas telas
+- **API:** o servidor web de verdade, incluindo 40 vendas simultâneas disputando 5 unidades.
+- **Interface:** abre o sistema num navegador real e faz o dia de trabalho completo clicando nas telas: vendas,
+  crediário, baixa parcial com troco, quitação, estorno, devolução, orçamento, entrada de mercadoria, fechamento de
+  caixa, atalhos de teclado, tema escuro e todas as telas na largura de um celular
   (precisa de Node.js com Playwright; se não houver, esse teste é pulado).
 
 ## Estrutura
