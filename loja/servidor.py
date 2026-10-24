@@ -43,7 +43,8 @@ def config(h, q, corpo):
             "formas_pagamento_conta": FORMAS_PAGAMENTO_CONTA, "hoje": loja.hoje().isoformat(),
             "primeira_venda": loja.primeira_venda().isoformat(), "versao": VERSAO,
             "loja": loja.obter_configuracoes(), "nome_loja": loja.obter_configuracoes()["nome_loja"],
-            "backup": h.backups.ultimo() if h.backups else None, "pode_desligar": h.ao_desligar is not None}
+            "backup": h.backups.ultimo() if h.backups else None, "pode_desligar": h.ao_desligar is not None,
+            "pid": os.getpid()}
 
 
 @rota("GET", "/api/configuracoes")

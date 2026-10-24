@@ -70,15 +70,15 @@ try {
     Copy-Item -Path (Join-Path $PSScriptRoot 'loja.ico') -Destination (Join-Path $Destino 'loja.ico') -Force
     Copy-Item -Path (Join-Path $PSScriptRoot 'comum.ps1') -Destination (Join-Path $Destino 'comum.ps1') -Force
     Copy-Item -Path (Join-Path $PSScriptRoot 'desinstalar.ps1') -Destination (Join-Path $Destino 'desinstalar.ps1') -Force
-    # faz o Python achar o programa de qualquer pasta (arquivo .pth, sem BOM)
+    # faz o Python achar o programa (arquivo .pth com caminho relativo: funciona com qualquer nome de usuário)
     $pth = [System.IO.Path]::Combine($PastaPython, 'Lib', 'site-packages', 'loja-app.pth')
-    [System.IO.File]::WriteAllText($pth, $PastaApp + "`r`n", (New-Object System.Text.UTF8Encoding $false))
+    [System.IO.File]::WriteAllText($pth, "..\..\..\app`r`n", [System.Text.Encoding]::ASCII)
 
     # 3. Dados da versão anterior (antes o banco ficava junto do programa, aberto pelo iniciar.bat)
     $bancoAntigo = Join-Path $Origem 'loja.db'
     if (Test-Path $bancoAntigo) {
         Passo 'Trazendo os dados da versão anterior...'
-        & $Python -m loja --importar $bancoAntigo
+        & $Python -I -m loja --importar $bancoAntigo
         if ($LASTEXITCODE -ne 0) { throw 'Não foi possível trazer os dados da versão anterior.' }
     }
 
@@ -89,20 +89,20 @@ try {
         foreach ($pasta in Pastas-Atalho) {
             $atalho = $shell.CreateShortcut((Join-Path $pasta $NomeAtalho))
             $atalho.TargetPath = $Pythonw
-            $atalho.Arguments = '-m loja'
+            $atalho.Arguments = '-I -m loja'
             $atalho.WorkingDirectory = $PastaApp
             $atalho.IconLocation = (Join-Path $Destino 'loja.ico')
             $atalho.Description = 'Sistema da loja de materiais de construção'
             $atalho.Save()
         }
     } catch {
-        Write-Warning "Não consegui criar os atalhos ($($_.Exception.Message)). Para abrir o sistema, use: `"$Pythonw`" -m loja"
+        Write-Warning "Não consegui criar os atalhos ($($_.Exception.Message)). Para abrir o sistema, use: `"$Pythonw`" -I -m loja"
     }
 
     # 5. Abrir
     if (-not $NaoAbrir) {
         Passo 'Abrindo o sistema...'
-        try { Start-Process -FilePath $Pythonw -ArgumentList '-m', 'loja' -WorkingDirectory $PastaApp }
+        try { Start-Process -FilePath $Pythonw -ArgumentList '-I', '-m', 'loja' -WorkingDirectory $PastaApp }
         catch { Write-Warning 'Não consegui abrir o sistema agora. Use o atalho na área de trabalho.' }
     }
     Write-Host ''

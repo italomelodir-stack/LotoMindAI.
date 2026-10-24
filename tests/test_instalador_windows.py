@@ -57,7 +57,7 @@ class TestInstaladorWindows(unittest.TestCase):
         self.assertTrue((app / "loja" / "__main__.py").is_file())
         self.assertEqual(list(app.rglob("__pycache__")), [])
         self.assertTrue((self.destino / "loja.ico").is_file())
-        self.assertEqual((python / "Lib" / "site-packages" / "loja-app.pth").read_text(encoding="utf-8").strip(), str(app))
+        self.assertEqual((python / "Lib" / "site-packages" / "loja-app.pth").read_bytes(), b"..\\..\\..\\app\r\n")
         if WINE:
             self.abrir_com_wine(python, app)
         # reinstalar (atualizar) reaproveita o Python
@@ -83,7 +83,7 @@ class TestInstaladorWindows(unittest.TestCase):
         dados, backups = self.tmp / "dados-win", self.tmp / "backups-win"
         env = dict(os.environ, WINEDEBUG="-all", LANG="C.UTF-8", LC_ALL="C.UTF-8", LOJA_SEM_JANELAS="1",
                    LOJA_DADOS=winepath(dados), LOJA_BACKUPS=winepath(backups))
-        abrir = ["wine", "start", "/unix", str(python / "pythonw.exe"), "-m", "loja", "--sem-navegador", "--porta", str(porta)]
+        abrir = ["wine", "start", "/unix", str(python / "pythonw.exe"), "-I", "-m", "loja", "--sem-navegador", "--porta", str(porta)]
         subprocess.run(abrir, cwd=app, env=env, timeout=120)
         url = f"http://127.0.0.1:{porta}"
         abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))

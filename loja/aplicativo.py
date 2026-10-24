@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 import traceback
 import urllib.request
 import webbrowser
@@ -65,13 +66,68 @@ def preparar_registro(pasta):
     return arquivo
 
 
-def sistema_ja_aberto(porta):
+def _pedir(porta, caminho, post=False, timeout=3):
     abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # nunca passar por proxy
+    req = urllib.request.Request(f"http://127.0.0.1:{porta}{caminho}", data=b"{}" if post else None,
+                                 method="POST" if post else "GET", headers={"Content-Type": "application/json"})
+    with abridor.open(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def config_do_aberto(porta):
+    """Configuração do sistema aberto nesta porta, ou None se não for ele."""
     try:
-        with abridor.open(f"http://127.0.0.1:{porta}/api/config", timeout=3) as r:
-            return "nome_loja" in json.loads(r.read().decode("utf-8"))
+        cfg = _pedir(porta, "/api/config")
+        return cfg if "nome_loja" in cfg else None
     except Exception:
+        return None
+
+
+def sistema_ja_aberto(porta):
+    return config_do_aberto(porta) is not None
+
+
+def _processo_vivo(pid):
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        k.CloseHandle.argtypes = (wintypes.HANDLE,)
+        h = k.OpenProcess(0x00100000, False, pid)   # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return k.WaitForSingleObject(h, 0) == 0x102   # WAIT_TIMEOUT: ainda rodando
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
         return False
+
+
+def fechar_abertos(porta_inicial, espera=60):
+    """Fecha o sistema que estiver aberto e espera o processo terminar (usado pelo instalador antes de
+    trocar os arquivos do programa). Retorna quantos foram fechados."""
+    fechados = 0
+    for porta in range(porta_inicial, porta_inicial + 20):
+        cfg = config_do_aberto(porta)
+        if not cfg:
+            continue
+        try:
+            _pedir(porta, "/api/desligar", post=True)
+        except Exception:
+            pass
+        limite = time.time() + espera
+        pid = cfg.get("pid")
+        while time.time() < limite and (_processo_vivo(pid) if pid else sistema_ja_aberto(porta)):
+            time.sleep(0.3)
+        fechados += 1
+    return fechados
 
 
 def importar_banco(origem, destino):
@@ -109,9 +165,11 @@ def main(argv=None):
     p.add_argument("--banco", help="arquivo do banco (padrão: loja.db dentro da pasta dos dados)")
     p.add_argument("--backups", help="pasta dos backups (padrão: Documentos/Backup da Loja)")
     p.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 para liberar o acesso de outros computadores da rede")
-    p.add_argument("--porta", type=int, default=PORTA_PADRAO)
-    p.add_argument("--sem-navegador", action="store_true", help="não abre o navegador")
+    p.add_argument("--porta", type=int, default=int(os.environ.get("LOJA_PORTA") or PORTA_PADRAO))
+    p.add_argument("--sem-navegador", action="store_true", default=bool(os.environ.get("LOJA_SEM_NAVEGADOR")),
+                   help="não abre o navegador")
     p.add_argument("--importar", metavar="ARQUIVO", help="copia um banco antigo para a pasta dos dados e sai")
+    p.add_argument("--fechar", action="store_true", help="fecha o sistema que estiver aberto (com backup) e sai")
     args = p.parse_args(argv)
 
     pasta = Path(args.dados) if args.dados else pasta_dados()
@@ -119,6 +177,10 @@ def main(argv=None):
     preparar_registro(pasta)
     banco = Path(args.banco) if args.banco else pasta / "loja.db"
     try:
+        if args.fechar:
+            n = fechar_abertos(args.porta)
+            print("Sistema fechado." if n else "O sistema não estava aberto.")
+            return 0
         if args.importar:
             if importar_banco(args.importar, banco):
                 print(f"Dados importados de {args.importar} para {banco}")

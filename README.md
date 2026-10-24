@@ -5,16 +5,28 @@ Funciona num computador com Windows 10 ou 11, abre no navegador e não depende d
 
 ## Instalar no Windows
 
-1. No GitHub, clique em **Code → Download ZIP** e salve o arquivo.
-2. Clique com o botão direito no ZIP baixado → **Extrair tudo...** → **Extrair**.
-   (Não rode o instalador de dentro do ZIP sem extrair.)
-3. Na pasta extraída, dê dois cliques em **`INSTALAR.bat`**.
-   - Se o Windows mostrar "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**.
-   - Na primeira instalação é preciso internet: o instalador baixa o Python oficial (cerca de 15 MB) e confere
-     a assinatura do arquivo antes de usar.
-   - Não precisa de senha de administrador.
-4. Pronto: aparece o atalho **Sistema da Loja** na área de trabalho e no menu Iniciar. O sistema já abre sozinho
-   no navegador.
+Use o instalador **`Instalar-Sistema-da-Loja-1.0.0.exe`** (um arquivo só, cerca de 8 MB):
+
+1. Copie o arquivo para o computador da loja (pen drive, e-mail, download...) e dê dois cliques nele.
+2. Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**.
+   (O aviso aparece porque o instalador não tem assinatura digital paga; é comum em programas de pequenas empresas.)
+3. Clique em **Instalar** e depois em **Concluir**. O sistema abre no navegador.
+
+Não precisa de internet nem de senha de administrador: o Python que o sistema usa já vai dentro do instalador.
+Ficam o atalho **Sistema da Loja** na área de trabalho e no menu Iniciar, e o item *Sistema da Loja* em
+*Configurações do Windows → Aplicativos* (por onde também se desinstala). Funciona no Windows 10 e 11 (64 bits).
+
+<details>
+<summary>Gerar o instalador ou instalar sem ele</summary>
+
+- **Gerar o `.exe`** (para quem mexe no programa): com o NSIS 3 instalado (Windows: nsis.sourceforge.io;
+  Linux: `apt install nsis`), rode `python instalador/construir_instalador.py`. O instalador sai em
+  `dist/Instalar-Sistema-da-Loja-<versão>.exe`. O Python oficial de Windows é baixado do NuGet e conferido pelo SHA-256.
+- **Sem o `.exe`, pelo ZIP do GitHub:** *Code → Download ZIP*, extraia (botão direito → *Extrair tudo*) e dê dois
+  cliques em `INSTALAR.bat`. Na primeira vez precisa de internet para baixar o Python (cerca de 15 MB). Instala no
+  mesmo lugar e do mesmo jeito que o `.exe`. Para remover: `DESINSTALAR.bat`.
+
+</details>
 
 **Primeiro dia:** vá em *Configurações* e preencha os dados da loja (nome, CNPJ, telefone, endereço — saem no topo
 dos comprovantes). Depois abra o caixa (menu *Caixa*), cadastre fornecedores, produtos e clientes, e comece a vender
@@ -45,12 +57,12 @@ em *Vender*.
 
 ### Atualizar e desinstalar
 
-- **Atualizar:** baixe a versão nova, extraia e rode `INSTALAR.bat` de novo. O sistema aberto é fechado (com backup)
-  e o programa é trocado; **os dados não são tocados**.
-- **Desinstalar:** `DESINSTALAR.bat` remove o programa e os atalhos. Os dados e os backups continuam guardados —
-  se instalar de novo, tudo volta.
-- Quem usava a versão anterior (aberta pelo `iniciar.bat`, com o `loja.db` dentro da pasta do programa):
-  rode o `INSTALAR.bat` na mesma pasta — os dados são trazidos automaticamente.
+- **Atualizar:** rode o instalador da versão nova por cima. Se o sistema estiver aberto, ele é fechado (com backup)
+  antes de trocar o programa; **os dados não são tocados**.
+- **Desinstalar:** *Configurações do Windows → Aplicativos → Sistema da Loja → Desinstalar*. Remove o programa e os
+  atalhos; os dados e os backups continuam guardados — se instalar de novo, tudo volta como estava.
+- Quem usava a primeira versão (aberta pelo `iniciar.bat`, com o `loja.db` dentro da pasta do programa): rode o
+  `INSTALAR.bat` naquela mesma pasta, que os dados são trazidos automaticamente.
 
 ### Outros sistemas (Linux/Mac) e opções avançadas
 
@@ -60,6 +72,7 @@ Com Python 3.9 ou mais novo: `python3 -m loja` (os dados ficam em `~/.local/shar
 python -m loja --porta 8080                 # porta (se estiver ocupada, usa a próxima livre)
 python -m loja --dados PASTA --backups PASTA  # outras pastas para dados e backups
 python -m loja --sem-navegador              # não abre o navegador
+python -m loja --fechar                     # fecha o sistema aberto (com backup) e espera ele terminar
 python -m loja --host 0.0.0.0               # libera o acesso de outros computadores da rede (sem senha!)
 ```
 
@@ -123,7 +136,7 @@ python -m loja --host 0.0.0.0               # libera o acesso de outros computad
 python -m unittest discover -s tests -t . -v
 ```
 
-São 158 testes automáticos (com centenas de casos dentro deles), incluindo:
+São 160 testes automáticos (com centenas de casos dentro deles), incluindo:
 
 - **Valores:** conversão de "1.234,56", arredondamento, rateio de centavos, validação de CPF/CNPJ.
 - **Estoque:** baixa na venda, bloqueio de estoque insuficiente, desfazer tudo se um item falhar, custo médio, inventário, perdas.
@@ -144,7 +157,11 @@ São 158 testes automáticos (com centenas de casos dentro deles), incluindo:
   dos antigos (150 dias simulados), restauração (inclusive de backup de versão antiga e recusa de arquivo danificado),
   dados da loja, e o programa aberto de verdade num processo separado: segundo clique no atalho, porta ocupada por
   outro programa, dados da versão anterior, funcionamento sem janela e mensagem de erro.
-- **Instalador do Windows:** roda o `instalar.ps1` no PowerShell, abre o programa instalado com o Python de Windows
+- **Instalador `.exe`:** gera o instalador e, num Windows simulado (wine) sem nada instalado, instala, confere os
+  atalhos e o item em *Aplicativos*, abre o sistema pelo atalho da área de trabalho e vende; atualiza com o sistema
+  aberto (ele fecha com backup e os dados continuam), desinstala com o sistema aberto (programa, atalhos e registro
+  saem; dados e backups ficam) e instala de novo (precisa de `makensis` e `wine`; sem eles, é pulado).
+- **Instalador pelo ZIP:** roda o `instalar.ps1` no PowerShell, abre o programa instalado com o Python de Windows
   (no wine), faz uma venda, fecha pela tela, reinstala e desinstala; recusa pacote do Python adulterado
   (precisa de `pwsh` e `wine`; sem eles, é pulado).
 - **Valor por extenso** dos recibos (30 valores, de centavos a milhões).
@@ -154,13 +171,17 @@ São 158 testes automáticos (com centenas de casos dentro deles), incluindo:
   restauração pela tela, fechar o sistema, atalhos de teclado, tema escuro e todas as telas na largura de um celular
   (precisa de Node.js com Playwright; se não houver, esse teste é pulado).
 
-Toda a bateria também foi rodada com o **Python oficial de Windows** (3.13, no wine): 153 testes aprovados.
+Toda a bateria também foi rodada com o **mesmo Python de Windows que vai dentro do instalador** (3.13, no wine):
+153 testes aprovados; os outros 7 usam ferramentas que só existem no computador de testes (wine, PowerShell,
+navegador automático) e são pulados lá.
 
 ## Estrutura
 
 ```
-INSTALAR.bat / DESINSTALAR.bat   instalação no Windows (dois cliques)
-instalador/      scripts do instalador (PowerShell) e ícone do atalho
+instalador/
+  loja.nsi                  instalador .exe (NSIS): telas, atalhos, desinstalador
+  construir_instalador.py   gera o .exe com o Python oficial de Windows dentro
+  instalar.ps1 ...          instalação pelo ZIP (INSTALAR.bat / DESINSTALAR.bat)
 loja/
   aplicativo.py  inicialização (pastas de dados, instância única, backup automático)
   backup.py      backups conferidos, limpeza e restauração

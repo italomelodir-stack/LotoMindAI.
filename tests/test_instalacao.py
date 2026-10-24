@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -201,6 +202,8 @@ class TestAplicativo(unittest.TestCase):
             if p.poll() is None:
                 p.kill()
                 p.wait()
+            if p.stdout:
+                p.stdout.close()
         self._tmp.cleanup()
 
     def iniciar(self, porta, *extra, cwd=None, codigo=None):
@@ -252,6 +255,23 @@ class TestAplicativo(unittest.TestCase):
         arquivos = sorted(b.name for b in (self.tmp / "backups").iterdir())
         self.assertEqual(len(arquivos), 2, arquivos)            # o do dia e o do fechamento, sem arquivos auxiliares
         self.assertTrue(all(a.endswith(".db") for a in arquivos))
+
+    def test_fechar_pelo_comando_espera_o_processo_terminar(self):
+        """É o que o instalador usa antes de trocar os arquivos do programa."""
+        porta = porta_livre()
+        p = self.iniciar(porta)
+        self.esperar(porta, p)
+        # quem abriu o sistema (no Windows, o Explorer) recolhe o processo quando ele termina; sem isto ele
+        # ficaria "zumbi" e pareceria vivo
+        threading.Thread(target=p.wait, daemon=True).start()
+        fechar = self.iniciar(porta, "--fechar")
+        saida, _ = fechar.communicate(timeout=90)
+        self.assertEqual(fechar.returncode, 0)
+        self.assertIn("Sistema fechado.", saida)
+        self.assertIsNotNone(p.poll(), "o processo do sistema deveria ter terminado antes do --fechar voltar")
+        self.assertEqual(p.returncode, 0)
+        nada = self.iniciar(porta, "--fechar")
+        self.assertIn("não estava aberto", nada.communicate(timeout=60)[0])
 
     def test_porta_ocupada_por_outro_programa(self):
         porta = porta_livre()
