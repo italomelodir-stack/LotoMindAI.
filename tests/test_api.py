@@ -133,10 +133,41 @@ class TestAPI(unittest.TestCase):
         self.chamar("POST", "/api/vendas", {"itens": "lixo"}, esperado=400)
 
     def test_json_invalido(self):
-        req = urllib.request.Request(self.url + "/api/produtos", data=b"{nada", method="POST")
+        req = urllib.request.Request(self.url + "/api/produtos", data=b"{nada", method="POST",
+                                     headers={"Content-Type": "application/json"})
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req)
         self.assertEqual(ctx.exception.code, 400)
+
+    def _pedido(self, caminho, metodo="GET", corpo=None, cabecalhos=None):
+        req = urllib.request.Request(self.url + caminho, data=corpo, method=metodo, headers=cabecalhos or {})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_bloqueia_pedidos_de_outros_sites(self):
+        """Um site malicioso aberto no mesmo navegador não pode mandar comandos para o sistema."""
+        corpo = json.dumps({"valor": "10"}).encode()
+        # formulário de outro site (sem Content-Type JSON), mesmo com a origem certa
+        self.assertEqual(self._pedido("/api/caixa/sangria", "POST", corpo, {"Content-Type": "text/plain"}), 403)
+        # pedido vindo de outra origem
+        self.assertEqual(self._pedido("/api/caixa/sangria", "POST", corpo,
+                                      {"Content-Type": "application/json", "Origin": "http://site-malicioso.com"}), 403)
+        # DNS rebinding: nome de outro site apontando para o computador
+        self.assertEqual(self._pedido("/api/clientes", "GET", None, {"Host": "site-malicioso.com"}), 403)
+        # a própria tela do sistema continua funcionando
+        porta = self.url.rsplit(":", 1)[1]
+        self.assertEqual(self._pedido("/api/clientes", "GET", None, {"Host": f"localhost:{porta}"}), 200)
+        self.assertEqual(self._pedido("/api/configuracoes", "PUT", json.dumps({"telefone": "(11) 4444-5555"}).encode(),
+                                      {"Content-Type": "application/json; charset=utf-8", "Origin": self.url}), 200)
+
+    def test_tipos_dos_arquivos(self):
+        for caminho, tipo in [("/app.js", "text/javascript"), ("/style.css", "text/css"), ("/", "text/html")]:
+            with urllib.request.urlopen(self.url + caminho) as r:
+                self.assertTrue(r.headers["Content-Type"].startswith(tipo))
+                self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
 
     def test_paginas_estaticas(self):
         for caminho, tipo in [("/", "text/html"), ("/app.js", "javascript"), ("/style.css", "text/css")]:

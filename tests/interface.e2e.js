@@ -6,7 +6,7 @@ const assert = require("assert");
 const URL_BASE = process.argv[2];
 const errosJs = [];
 const PAGINAS = ["painel", "pdv", "receber-cliente", "orcamentos", "vendas", "caixa", "produtos", "compras", "movimentos",
-  "clientes", "fornecedores", "receber", "pagar", "relatorios"];
+  "clientes", "fornecedores", "receber", "pagar", "relatorios", "configuracoes"];
 
 async function principal() {
   const navegador = await chromium.launch();
@@ -111,7 +111,9 @@ async function principal() {
   assert.match(await texto("#modal-corpo"), /Troco R\$ 33,30/);
   await modal().locator("#imp").click();
   assert.strictEqual(await pagina.evaluate(() => window.__impresso), 1);
-  assert.match(await texto("#impressao"), /TOTAL\s*R\$ 116,70/);
+  assert.match(await texto("#impressao"), /Comprovante de venda/);
+  assert.match(await texto("#impressao"), /Total\s*R\$ 116,70/);
+  assert.match(await texto("#impressao"), /Troco\s*R\$ 33,30/);
   await modal().locator("#ok").click();
   await pagina.waitForSelector("#cart-vazio .cart-vazio");
   assert.strictEqual((await api(`/api/produtos/${cim.id}`)).estoque, 47000);
@@ -182,8 +184,9 @@ async function principal() {
   assert.match(await texto("#modal-corpo"), /Troco R\$ 50,00/);
   assert.match(await texto("#modal-corpo"), /Ainda deve R\$ 262,50/);
   await modal().locator("#imp").click();
-  assert.match(await texto("#impressao"), /COMPROVANTE DE PAGAMENTO/);
-  assert.match(await texto("#impressao"), /SALDO DEVEDOR ATUAL\s*R\$ 262,50/);
+  assert.match(await texto("#impressao"), /Recibo de pagamento/);
+  assert.match(await texto("#impressao"), /a importância de R\$ 100,00\s*\(cem reais\)/);
+  assert.match(await texto("#impressao"), /Ainda deve\s*R\$ 262,50/);
   await modal().locator("#ok").click();
   await pagina.waitForSelector("td:has-text('pagou no balcão')");
   cli = await api(`/api/clientes/${cliente.id}`);
@@ -288,10 +291,7 @@ async function principal() {
   await pagina.keyboard.press("Escape");
   passo("sangria de R$ 50,00 e fechamento com R$ 227,80 contados: sem diferença");
 
-  // 16. relatórios, painel com gráfico e conferência
-  await ir("relatorios");
-  await pagina.click("#integridade");
-  await pagina.waitForSelector("text=Tudo confere.");
+  // 16. relatórios e painel com gráfico
   const rel = await api("/api/relatorios/vendas");
   assert.strictEqual(rel.quantidade, 3);
   assert.strictEqual(rel.liquido, 11670 + 36250 + 15000 - 3890);
@@ -341,8 +341,56 @@ async function principal() {
   await pagina.click(`a[href='#cliente/${cliente.id}']`);
   await pagina.waitForSelector("#titulo-pagina:has-text('Histórico do cliente')");
   passo("relatórios mês a mês (12 meses), por categoria (com produtos), por cliente e histórico de cada cliente");
+  const impressoes = await pagina.evaluate(() => window.__impresso);
+  await pagina.click("#imprimir-hist");
+  assert.strictEqual(await pagina.evaluate(() => window.__impresso), impressoes + 1);
+  await ir("relatorios");
+  await pagina.click("#imprimir-rel");
+  assert.strictEqual(await pagina.evaluate(() => window.__impresso), impressoes + 2);
+  passo("botões de imprimir do relatório e do histórico");
+
+  // 16c. configurações: dados da loja na impressão A4, conferência, backup e restauração pela tela
+  await ir("configuracoes");
+  await pagina.fill("#f-loja [name=nome_loja]", "Casa do Construtor Silva");
+  await pagina.fill("#f-loja [name=documento]", "11222333000181");
+  await pagina.fill("#f-loja [name=telefone]", "(11) 3333-4444");
+  await pagina.fill("#f-loja [name=endereco]", "Av. Brasil, 1500 — Centro");
+  await pagina.click("#f-loja button[type=submit]");
+  await pagina.waitForSelector(".toast:has-text('Dados da loja salvos')");
+  await pagina.waitForSelector(".brand-nome:has-text('Casa do Construtor Silva')");
+  await pagina.click("#previa-doc");
+  await pagina.waitForSelector("#modal .doc");
+  assert.match(await texto("#modal .doc-cab"), /Casa do Construtor Silva CNPJ 11\.222\.333\/0001-81 · \(11\) 3333-4444 Av\. Brasil/);
+  await pagina.keyboard.press("Escape");
+  await ir("vendas");
+  await pagina.locator(".ver").last().click();
+  await modal().locator("#imp").click();
+  assert.match(await texto("#impressao"), /Casa do Construtor Silva/);
+  assert.match(await texto("#impressao"), /Documento sem valor fiscal/);
+  await pagina.keyboard.press("Escape");
+  await ir("configuracoes");
+  await pagina.click("#integridade");
+  await pagina.waitForSelector("text=Tudo confere.");
+  await pagina.click("#bk-agora");
+  await pagina.waitForSelector(".toast:has-text('Backup feito e conferido')");
+  await pagina.waitForSelector(".restaurar");
+  await pagina.request.post(URL_BASE + "/api/clientes", { data: { nome: "Cliente Depois do Backup" } });
+  assert.strictEqual((await api("/api/clientes")).length, 2);
+  await ir("configuracoes");
+  await pagina.locator(".restaurar").first().click();
+  await modal().locator("button[type=submit]").click();               // sem marcar "entendi" não restaura
+  assert.strictEqual((await api("/api/clientes")).length, 2);
+  await modal().locator("[name=entendi]").check();
+  await modal().locator("button[type=submit]").click();
+  await pagina.waitForSelector(".toast:has-text('Backup restaurado')");
+  assert.deepStrictEqual((await api("/api/clientes")).map((c) => c.nome), ["Construtora Boa Obra"]);
+  await pagina.waitForFunction(() => document.readyState === "complete" && document.querySelector("#conteudo .card"));
+  await ir("configuracoes");
+  assert.ok((await pagina.locator(".restaurar").count()) >= 2, "a cópia de antes da restauração aparece na lista");
+  passo("dados da loja no A4, conferência, backup manual e restauração (com cópia de segurança antes)");
 
   // 17. tema escuro e atalho F2
+  await ir("painel");
   const fundoClaro = await pagina.evaluate(() => getComputedStyle(document.body).backgroundColor);
   await pagina.click("#tema-btn");
   assert.strictEqual(await pagina.evaluate(() => document.documentElement.dataset.theme), "dark");
@@ -366,6 +414,19 @@ async function principal() {
   await pagina.click("#sidebar a[href='#clientes']");
   await pagina.waitForSelector("#titulo-pagina:has-text('Clientes')");
   passo("no celular todas as telas cabem na largura e o menu lateral abre e navega");
+
+  // 19. fechar o sistema pela tela
+  await pagina.setViewportSize({ width: 1366, height: 900 });
+  await ir("configuracoes");
+  await pagina.click("#desligar");
+  await modal().locator("[data-s]").click();
+  await pagina.waitForSelector("h1:has-text('Sistema fechado')");
+  let parou = false;
+  for (let i = 0; i < 30 && !parou; i++) {
+    try { await pagina.request.get(URL_BASE + "/api/config", { timeout: 1000 }); await pagina.waitForTimeout(300); } catch (_) { parou = true; }
+  }
+  assert.ok(parou, "o sistema deveria ter parado");
+  passo("botão 'Fechar o sistema' encerra o programa e mostra a tela de fechado");
 
   await navegador.close();
   assert.deepStrictEqual(errosJs, [], "erros de JavaScript no navegador");

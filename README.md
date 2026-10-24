@@ -1,27 +1,67 @@
 # Sistema para Loja de Material de Construção
 
 Sistema completo de vendas, estoque, caixa e financeiro para loja de material de construção.
-Roda no navegador, guarda tudo num arquivo local (`loja.db`) e **não precisa instalar nada além do Python 3.9+**.
+Funciona num computador com Windows 10 ou 11, abre no navegador e não depende de internet no dia a dia.
 
-## Como usar
+## Instalar no Windows
 
-1. Instale o [Python](https://www.python.org/downloads/) (no Windows, marque "Add Python to PATH").
-2. Inicie o sistema:
-   - **Windows:** dê dois cliques em `iniciar.bat`
-   - **Linux/Mac:** `./iniciar.sh` (ou `python3 -m loja`)
-3. Abra **http://localhost:8080** no navegador.
+1. No GitHub, clique em **Code → Download ZIP** e salve o arquivo.
+2. Clique com o botão direito no ZIP baixado → **Extrair tudo...** → **Extrair**.
+   (Não rode o instalador de dentro do ZIP sem extrair.)
+3. Na pasta extraída, dê dois cliques em **`INSTALAR.bat`**.
+   - Se o Windows mostrar "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**.
+   - Na primeira instalação é preciso internet: o instalador baixa o Python oficial (cerca de 15 MB) e confere
+     a assinatura do arquivo antes de usar.
+   - Não precisa de senha de administrador.
+4. Pronto: aparece o atalho **Sistema da Loja** na área de trabalho e no menu Iniciar. O sistema já abre sozinho
+   no navegador.
 
-Opções:
+**Primeiro dia:** vá em *Configurações* e preencha os dados da loja (nome, CNPJ, telefone, endereço — saem no topo
+dos comprovantes). Depois abra o caixa (menu *Caixa*), cadastre fornecedores, produtos e clientes, e comece a vender
+em *Vender*.
+
+### Usando no dia a dia
+
+- **Abrir:** dois cliques no atalho *Sistema da Loja*. Se já estiver aberto, ele só traz a tela de volta.
+- **Fechar:** *Configurações → Fechar o sistema* (faz um backup e fecha). Desligar o computador direto também não
+  perde dados.
+- **Imprimir:** comprovante de venda, orçamento e recibo de pagamento saem em folha **A4**, com os dados da loja.
+  Os relatórios e o histórico do cliente também têm botão *Imprimir*. Os documentos dizem "sem valor fiscal":
+  o sistema **não emite nota fiscal** (NFC-e/NF-e).
+
+### Onde ficam os dados e os backups
+
+| O quê | Onde |
+|---|---|
+| Dados do sistema | `C:\Users\(seu usuário)\AppData\Local\LojaMaterialConstrucao\loja.db` |
+| Backups | `Documentos\Backup da Loja` |
+| Programa | `C:\Users\(seu usuário)\AppData\Local\Programs\LojaMaterialConstrucao` |
+
+- O backup é **automático**: todo dia, ao fechar o caixa e ao fechar o sistema. Cada cópia é conferida antes de ser
+  guardada. Ficam todos os dos últimos 7 dias e um por dia até 90 dias.
+- Em *Configurações* dá para escolher uma **cópia extra** (pen drive, HD externo ou pasta do OneDrive/Google Drive),
+  fazer backup na hora e **restaurar** um backup (antes de restaurar, o sistema guarda o estado atual).
+- O painel avisa se o backup estiver atrasado ou se a cópia extra falhar (por exemplo, pen drive desconectado).
+
+### Atualizar e desinstalar
+
+- **Atualizar:** baixe a versão nova, extraia e rode `INSTALAR.bat` de novo. O sistema aberto é fechado (com backup)
+  e o programa é trocado; **os dados não são tocados**.
+- **Desinstalar:** `DESINSTALAR.bat` remove o programa e os atalhos. Os dados e os backups continuam guardados —
+  se instalar de novo, tudo volta.
+- Quem usava a versão anterior (aberta pelo `iniciar.bat`, com o `loja.db` dentro da pasta do programa):
+  rode o `INSTALAR.bat` na mesma pasta — os dados são trazidos automaticamente.
+
+### Outros sistemas (Linux/Mac) e opções avançadas
+
+Com Python 3.9 ou mais novo: `python3 -m loja` (os dados ficam em `~/.local/share/LojaMaterialConstrucao`).
 
 ```
-python -m loja --porta 8080 --banco loja.db     # arquivo do banco e porta
-python -m loja --host 0.0.0.0                   # libera acesso de outros computadores da rede (ex.: 2º caixa)
+python -m loja --porta 8080                 # porta (se estiver ocupada, usa a próxima livre)
+python -m loja --dados PASTA --backups PASTA  # outras pastas para dados e backups
+python -m loja --sem-navegador              # não abre o navegador
+python -m loja --host 0.0.0.0               # libera o acesso de outros computadores da rede (sem senha!)
 ```
-
-O nome que aparece no topo e nos comprovantes é definido pela variável de ambiente `LOJA_NOME`
-(ex.: `set LOJA_NOME=Casa do Construtor` no Windows antes de iniciar).
-
-**Primeiro dia:** abra o caixa (menu *Caixa*), cadastre fornecedores, produtos e clientes, e comece a vender em *Vender*.
 
 ### Interface
 
@@ -56,7 +96,7 @@ O nome que aparece no topo e nos comprovantes é definido pela variável de ambi
 | **Caixa** | Abertura com fundo de troco, sangria, suprimento, totais por forma de pagamento e fechamento com conferência (mostra sobra ou falta) |
 | **Painel** | Vendas e lucro do dia, dinheiro no caixa, gráfico das vendas dos últimos 14 dias, clientes com conta vencida, estoque baixo e contas a pagar da semana |
 | **Relatórios** | Período livre ou atalhos (este mês, 3, 6 ou 12 meses, este ano, tudo), em quatro abas: **Resumo** (faturamento bruto/líquido, descontos, devoluções, custo, lucro bruto, ticket médio, formas de pagamento, mais vendidos, valor do estoque), **Mês a mês** (gráfico e tabela com vendas, líquido, lucro e margem de cada mês), **Por categoria** (quanto vendeu de elétrica, hidráulica, cimento... com lucro e margem; clique para ver os produtos) e **Por cliente** (ranking de quem mais comprou, com acesso ao histórico de cada um) |
-| **Segurança dos dados** | Botão "Conferir consistência" (confere estoque × movimentações, vendas × pagamentos × parcelas × caixa) e botão de backup |
+| **Configurações** | Dados da loja para os documentos impressos, backup automático com cópia extra e restauração, conferência de consistência (estoque × movimentações, vendas × pagamentos × parcelas × caixa) e botão para fechar o sistema |
 
 ### Regras que o sistema garante
 
@@ -74,11 +114,8 @@ O nome que aparece no topo e nos comprovantes é definido pela variável de ambi
 - O estorno de um pagamento devolve a dívida ao cliente e tira o valor do caixa; não é permitido se a compra teve devolução depois.
 - Venda e recebimento exigem caixa aberto.
 - O banco de dados também recusa estoque negativo, pagamento acima do devido etc., mesmo que alguém mexa por fora.
-
-## Backup
-
-Todos os dados ficam no arquivo `loja.db`. Use o botão *Relatórios → Fazer backup agora* (salva em `backups/`)
-e copie essa pasta para um pen drive ou nuvem regularmente.
+- Só a própria tela do sistema consegue mandar comandos para ele: um site aberto no mesmo navegador não consegue
+  (proteção contra CSRF e DNS rebinding). Por padrão o sistema só aceita conexões do próprio computador.
 
 ## Testes
 
@@ -86,7 +123,7 @@ e copie essa pasta para um pen drive ou nuvem regularmente.
 python -m unittest discover -s tests -t . -v
 ```
 
-São 134 testes automáticos (com centenas de casos dentro deles), incluindo:
+São 158 testes automáticos (com centenas de casos dentro deles), incluindo:
 
 - **Valores:** conversão de "1.234,56", arredondamento, rateio de centavos, validação de CPF/CNPJ.
 - **Estoque:** baixa na venda, bloqueio de estoque insuficiente, desfazer tudo se um item falhar, custo médio, inventário, perdas.
@@ -101,17 +138,32 @@ São 134 testes automáticos (com centenas de casos dentro deles), incluindo:
   inventários, sangrias, vários dias) comparando o sistema, depois de cada operação, com um controle paralelo
   calculado de forma independente: estoque de cada produto, dinheiro na gaveta e dívida de cada cliente. No final,
   os relatórios mês a mês, por categoria e por cliente precisam somar exatamente o total.
-- **API:** o servidor web de verdade, incluindo 40 vendas simultâneas disputando 5 unidades.
+- **API:** o servidor web de verdade, incluindo 40 vendas simultâneas disputando 5 unidades e a recusa de comandos
+  vindos de outros sites.
+- **Backup e inicialização:** backup conferido e em arquivo único, cópia extra com pen drive desconectado, limpeza
+  dos antigos (150 dias simulados), restauração (inclusive de backup de versão antiga e recusa de arquivo danificado),
+  dados da loja, e o programa aberto de verdade num processo separado: segundo clique no atalho, porta ocupada por
+  outro programa, dados da versão anterior, funcionamento sem janela e mensagem de erro.
+- **Instalador do Windows:** roda o `instalar.ps1` no PowerShell, abre o programa instalado com o Python de Windows
+  (no wine), faz uma venda, fecha pela tela, reinstala e desinstala; recusa pacote do Python adulterado
+  (precisa de `pwsh` e `wine`; sem eles, é pulado).
+- **Valor por extenso** dos recibos (30 valores, de centavos a milhões).
 - **Interface:** abre o sistema num navegador real e faz o dia de trabalho completo clicando nas telas: vendas,
   crediário, baixa parcial com troco, quitação, estorno, devolução, orçamento, entrada de mercadoria, fechamento de
-  caixa, relatórios por mês/categoria/cliente, histórico do cliente, atalhos de teclado, tema escuro e todas as
-  telas na largura de um celular
+  caixa, relatórios por mês/categoria/cliente, histórico do cliente, impressão em A4 com os dados da loja, backup e
+  restauração pela tela, fechar o sistema, atalhos de teclado, tema escuro e todas as telas na largura de um celular
   (precisa de Node.js com Playwright; se não houver, esse teste é pulado).
+
+Toda a bateria também foi rodada com o **Python oficial de Windows** (3.13, no wine): 153 testes aprovados.
 
 ## Estrutura
 
 ```
+INSTALAR.bat / DESINSTALAR.bat   instalação no Windows (dois cliques)
+instalador/      scripts do instalador (PowerShell) e ícone do atalho
 loja/
+  aplicativo.py  inicialização (pastas de dados, instância única, backup automático)
+  backup.py      backups conferidos, limpeza e restauração
   valores.py     dinheiro, quantidades, CPF/CNPJ, datas
   banco.py       tabelas do banco (SQLite) com travas de segurança
   sistema.py     todas as regras de negócio

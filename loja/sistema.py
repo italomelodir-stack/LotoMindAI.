@@ -4,10 +4,12 @@ Todas as operações que alteram dados rodam numa transação única: ou tudo é
 gravado (venda, baixa de estoque, caixa, parcelas), ou nada é.
 """
 import datetime
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
 from decimal import Decimal
+from pathlib import Path
 
 from . import valores as v
 from .banco import criar_esquema
@@ -27,6 +29,20 @@ FORMAS_RECEBIMENTO = ("DINHEIRO", "PIX", "DEBITO", "CREDITO")
 FORMAS_REEMBOLSO = ("DINHEIRO", "PIX", "DEBITO", "CREDITO")
 FORMAS_PAGAMENTO_CONTA = ("DINHEIRO_CAIXA", "PIX", "TRANSFERENCIA", "BOLETO", "CHEQUE")
 MAX_PARCELAS = 24
+
+CONFIG_PADRAO = {
+    "nome_loja": "Loja de Materiais de Construção",
+    "documento": "", "telefone": "", "email": "", "endereco": "",
+    "rodape_venda": "Obrigado pela preferência!",
+    "condicoes_orcamento": "Orçamento sujeito à disponibilidade de estoque. Preços válidos até a data indicada.",
+    "pasta_backup_extra": "",
+}
+# limite de tamanho e nome de cada campo das configurações
+CAMPOS_CONFIG = {
+    "nome_loja": (120, "Nome da loja"), "documento": (20, "CPF/CNPJ"), "telefone": (60, "Telefone"),
+    "email": (120, "E-mail"), "endereco": (300, "Endereço"), "rodape_venda": (600, "Mensagem do comprovante"),
+    "condicoes_orcamento": (1000, "Condições do orçamento"), "pasta_backup_extra": (500, "Pasta da cópia extra"),
+}
 
 
 def _txt(dados, chave, obrigatorio=False, nome=None, padrao=""):
@@ -140,9 +156,91 @@ class Loja:
             alvo = sqlite3.connect(destino)
             try:
                 self.conn.backup(alvo)
+                alvo.execute("PRAGMA journal_mode = DELETE")   # arquivo único, sem os auxiliares -wal/-shm
             finally:
                 alvo.close()
         return destino
+
+    @staticmethod
+    def _abrir_somente_leitura(caminho):
+        # immutable: só lê o arquivo, sem criar arquivos auxiliares ao lado dele
+        return sqlite3.connect(Path(caminho).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+
+    @classmethod
+    def verificar_banco(cls, caminho, imutavel=True):
+        """Confere se o arquivo é um banco da loja e está íntegro (usado no backup e na restauração).
+        imutavel=False para um banco que pode estar em uso (lê também o diário -wal ao lado dele)."""
+        if not Path(caminho).is_file():
+            raise LojaError(f"Arquivo não encontrado: {caminho}")
+        try:
+            con = cls._abrir_somente_leitura(caminho) if imutavel else sqlite3.connect(caminho)
+            try:
+                resultado = con.execute("PRAGMA integrity_check").fetchone()[0]
+                tabelas = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            finally:
+                con.close()
+        except sqlite3.DatabaseError as e:
+            raise LojaError(f"O arquivo não é um banco de dados válido ({e})") from None
+        if resultado != "ok":
+            raise LojaError(f"O arquivo de backup está danificado ({resultado})")
+        if not {"produtos", "vendas", "clientes", "caixa_sessoes"} <= tabelas:
+            raise LojaError("Este arquivo não é um backup do sistema da loja")
+
+    def restaurar_de(self, caminho):
+        """Troca todos os dados atuais pelos do arquivo de backup."""
+        self.verificar_banco(caminho)
+        with self._lock:
+            if self._em_transacao:
+                raise LojaError("Há uma operação em andamento; tente de novo")
+            origem = self._abrir_somente_leitura(caminho)
+            try:
+                origem.backup(self.conn)
+            finally:
+                origem.close()
+            if self.caminho != ":memory:":
+                self.conn.execute("PRAGMA journal_mode = WAL")
+            criar_esquema(self.conn)   # backup de versão anterior ganha as tabelas e colunas novas
+
+    # ------------------------------------------------------------ configurações
+    def obter_configuracoes(self):
+        dados = dict(CONFIG_PADRAO)
+        dados["nome_loja"] = os.environ.get("LOJA_NOME") or dados["nome_loja"]
+        for r in self._todos("SELECT chave, valor FROM configuracoes"):
+            if r["chave"] in dados:
+                dados[r["chave"]] = r["valor"]
+        return dados
+
+    def salvar_configuracoes(self, dados):
+        novos = {}
+        for chave, (limite, rotulo) in CAMPOS_CONFIG.items():
+            if chave in dados:
+                valor = str(dados[chave] if dados[chave] is not None else "").strip()
+                if len(valor) > limite:
+                    raise LojaError(f"{rotulo}: texto longo demais (máximo {limite} caracteres)")
+                novos[chave] = valor
+        if "nome_loja" in novos and not novos["nome_loja"]:
+            raise LojaError("Nome da loja: campo obrigatório")
+        if novos.get("documento"):
+            novos["documento"] = v.documento(novos["documento"])
+        if novos.get("pasta_backup_extra") and not os.path.isdir(novos["pasta_backup_extra"]):
+            raise LojaError("Pasta da cópia extra não encontrada. Se for um pen drive, confira se está conectado.")
+        with self._transacao():
+            for chave, valor in novos.items():
+                self._gravar_config(chave, valor)
+        return self.obter_configuracoes()
+
+    def _gravar_config(self, chave, valor):
+        self.conn.execute("INSERT INTO configuracoes (chave, valor) VALUES (?, ?)"
+                          " ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor", (chave, valor))
+
+    def ler_interno(self, chave):
+        """Valores internos do sistema (ex.: situação do último backup), separados das configurações."""
+        r = self._um("SELECT valor FROM configuracoes WHERE chave = ?", "_" + chave)
+        return r["valor"] if r else None
+
+    def gravar_interno(self, chave, valor):
+        with self._transacao():
+            self._gravar_config("_" + chave, valor)
 
     # ----------------------------------------------------------- fornecedores
     def cadastrar_fornecedor(self, dados):
@@ -692,7 +790,8 @@ class Loja:
 
     def obter_venda(self, vid):
         venda = self._um(
-            "SELECT v.*, c.nome AS cliente, c.documento AS cliente_documento FROM vendas v"
+            "SELECT v.*, c.nome AS cliente, c.documento AS cliente_documento, c.telefone AS cliente_telefone,"
+            " c.endereco AS cliente_endereco FROM vendas v"
             " LEFT JOIN clientes c ON c.id = v.cliente_id WHERE v.id = ?", vid)
         if not venda:
             raise NaoEncontrado(f"Venda {vid} não encontrada")
@@ -856,7 +955,8 @@ class Loja:
         return self.obter_orcamento(oid)
 
     def obter_orcamento(self, oid):
-        o = self._um("SELECT o.*, c.nome AS cliente FROM orcamentos o LEFT JOIN clientes c"
+        o = self._um("SELECT o.*, c.nome AS cliente, c.documento AS cliente_documento, c.telefone AS cliente_telefone,"
+                     " c.endereco AS cliente_endereco FROM orcamentos o LEFT JOIN clientes c"
                      " ON c.id = o.cliente_id WHERE o.id = ?", oid)
         if not o:
             raise NaoEncontrado(f"Orçamento {oid} não encontrado")
@@ -1024,7 +1124,8 @@ class Loja:
         return self.obter_baixa(bid)
 
     def obter_baixa(self, bid):
-        b = self._um("SELECT b.*, c.nome AS cliente, c.documento AS cliente_documento FROM baixas b"
+        b = self._um("SELECT b.*, c.nome AS cliente, c.documento AS cliente_documento, c.telefone AS cliente_telefone,"
+                     " c.endereco AS cliente_endereco FROM baixas b"
                      " JOIN clientes c ON c.id = b.cliente_id WHERE b.id = ?", bid)
         if not b:
             raise NaoEncontrado(f"Baixa {bid} não encontrada")

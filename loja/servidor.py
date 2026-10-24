@@ -1,25 +1,31 @@
 """Servidor web do sistema: API JSON em /api/... e a interface em /."""
-import datetime
 import json
-import mimetypes
 import os
 import re
+import socket
+import socketserver
+import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import VERSAO
 from .sistema import (FORMAS_PAGAMENTO, FORMAS_PAGAMENTO_CONTA, FORMAS_RECEBIMENTO, FORMAS_REEMBOLSO,
                       UNIDADES, FRACIONAVEIS, Loja)
 from .valores import LojaError, NaoEncontrado
 
 ESTATICOS = Path(__file__).parent / "static"
+# tipos fixos: no Windows o mimetypes lê o registro, que às vezes tem valores errados para .js e .css
+TIPOS = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+         ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 ROTAS = []
 
 
-def rota(metodo, padrao):
+def rota(metodo, padrao, com_servidor=False):
+    """com_servidor=True: a função recebe o manipulador da requisição (acesso aos backups e ao desligamento)."""
     def registrar(func):
-        ROTAS.append((metodo, re.compile(f"^{padrao}$"), func))
+        ROTAS.append((metodo, re.compile(f"^{padrao}$"), func, com_servidor))
         return func
     return registrar
 
@@ -29,13 +35,25 @@ def _bool(q, chave):
 
 
 # ------------------------------------------------------------------- rotas
-@rota("GET", "/api/config")
-def config(loja, q, corpo):
+@rota("GET", "/api/config", com_servidor=True)
+def config(h, q, corpo):
+    loja = h.loja
     return {"unidades": UNIDADES, "fracionaveis": sorted(FRACIONAVEIS), "formas_pagamento": FORMAS_PAGAMENTO,
             "formas_recebimento": FORMAS_RECEBIMENTO, "formas_reembolso": FORMAS_REEMBOLSO,
             "formas_pagamento_conta": FORMAS_PAGAMENTO_CONTA, "hoje": loja.hoje().isoformat(),
-            "nome_loja": os.environ.get("LOJA_NOME", "Loja de Materiais de Construção"),
-            "primeira_venda": loja.primeira_venda().isoformat()}
+            "primeira_venda": loja.primeira_venda().isoformat(), "versao": VERSAO,
+            "loja": loja.obter_configuracoes(), "nome_loja": loja.obter_configuracoes()["nome_loja"],
+            "backup": h.backups.ultimo() if h.backups else None, "pode_desligar": h.ao_desligar is not None}
+
+
+@rota("GET", "/api/configuracoes")
+def configuracoes(loja, q, corpo):
+    return loja.obter_configuracoes()
+
+
+@rota("PUT", "/api/configuracoes")
+def salvar_configuracoes(loja, q, corpo):
+    return loja.salvar_configuracoes(corpo)
 
 
 @rota("GET", "/api/painel")
@@ -270,9 +288,15 @@ def abrir_caixa(loja, q, corpo):
     return loja.abrir_caixa(corpo.get("valor_inicial"), corpo.get("operador"))
 
 
-@rota("POST", "/api/caixa/fechar")
-def fechar_caixa(loja, q, corpo):
-    return loja.fechar_caixa(corpo.get("valor_contado"), corpo.get("observacao"))
+@rota("POST", "/api/caixa/fechar", com_servidor=True)
+def fechar_caixa(h, q, corpo):
+    sessao = h.loja.fechar_caixa(corpo.get("valor_contado"), corpo.get("observacao"))
+    if h.backups:
+        try:
+            sessao["backup"] = h.backups.fazer("fechamento do caixa")
+        except Exception:   # o caixa já foi fechado; a falha do backup fica registrada e aparece no painel
+            traceback.print_exc()
+    return sessao
 
 
 @rota("POST", "/api/caixa/sangria")
@@ -326,21 +350,43 @@ def integridade(loja, q, corpo):
     return {"ok": not problemas, "problemas": problemas}
 
 
-@rota("POST", "/api/backup")
-def backup(loja, q, corpo):
-    if loja.caminho == ":memory:":
-        raise LojaError("Banco em memória não tem backup")
-    pasta = Path(loja.caminho).resolve().parent / "backups"
-    pasta.mkdir(exist_ok=True)
-    destino = pasta / f"loja-{datetime.datetime.now():%Y%m%d-%H%M%S}.db"
-    loja.backup(str(destino))
-    return {"arquivo": str(destino)}
+def _backups(h):
+    if not h.backups:
+        raise LojaError("Backup não está disponível neste modo")
+    return h.backups
+
+
+@rota("GET", "/api/backups", com_servidor=True)
+def listar_backups(h, q, corpo):
+    b = _backups(h)
+    return {"pasta": str(b.pasta), "ultimo": b.ultimo(), "lista": b.listar()}
+
+
+@rota("POST", "/api/backups", com_servidor=True)
+def fazer_backup(h, q, corpo):
+    return _backups(h).fazer("manual")
+
+
+@rota("POST", "/api/backups/restaurar", com_servidor=True)
+def restaurar_backup(h, q, corpo):
+    return _backups(h).restaurar(corpo.get("nome"))
+
+
+@rota("POST", "/api/desligar", com_servidor=True)
+def desligar(h, q, corpo):
+    if not h.ao_desligar:
+        raise LojaError("Não é possível fechar o sistema por aqui")
+    threading.Timer(0.3, h.ao_desligar).start()   # responde antes de desligar
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ servidor
 class Manipulador(BaseHTTPRequestHandler):
     loja: Loja = None
+    backups = None
+    ao_desligar = None
     silencioso = False
+    hosts_permitidos = None   # None = qualquer um (modo rede)
 
     def log_message(self, formato, *args):
         if not self.silencioso:
@@ -353,13 +399,32 @@ class Manipulador(BaseHTTPRequestHandler):
         self.send_header("Content-Type", tipo)
         self.send_header("Content-Length", str(len(corpo)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         self.end_headers()
         self.wfile.write(corpo)
+
+    def _origem_confiavel(self, metodo):
+        """Só aceita comandos da própria tela do sistema: bloqueia sites de fora que tentem usar o
+        navegador do usuário para mandar pedidos ao sistema (CSRF e DNS rebinding)."""
+        host = (self.headers.get("Host") or "").lower()
+        if self.hosts_permitidos is not None and host not in self.hosts_permitidos:
+            return False
+        origem = self.headers.get("Origin")
+        if origem and urlparse(origem).netloc.lower() != host:
+            return False
+        if metodo in ("POST", "PUT"):
+            tipo = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if tipo != "application/json":
+                return False
+        return True
 
     def _api(self, metodo):
         url = urlparse(self.path)
         q = {k: vs[-1] for k, vs in parse_qs(url.query).items()}
-        for m, padrao, func in ROTAS:
+        if not self._origem_confiavel(metodo):
+            return self._responder(403, {"erro": "Pedido recusado: origem não autorizada"})
+        for m, padrao, func, com_servidor in ROTAS:
             achou = padrao.match(url.path)
             if m == metodo and achou:
                 break
@@ -373,7 +438,7 @@ class Manipulador(BaseHTTPRequestHandler):
                     corpo = json.loads(self.rfile.read(tamanho).decode("utf-8"))
                 if not isinstance(corpo, dict):
                     raise LojaError("Corpo da requisição inválido")
-            resultado = func(self.loja, q, corpo, **achou.groupdict())
+            resultado = func(self if com_servidor else self.loja, q, corpo, **achou.groupdict())
             self._responder(200, resultado)
         except NaoEncontrado as e:
             self._responder(404, {"erro": str(e)})
@@ -392,9 +457,7 @@ class Manipulador(BaseHTTPRequestHandler):
         arquivo = (ESTATICOS / caminho.lstrip("/")).resolve()
         if ESTATICOS.resolve() not in arquivo.parents or not arquivo.is_file():
             return self._responder(404, {"erro": "Arquivo não encontrado"})
-        tipo = mimetypes.guess_type(arquivo.name)[0] or "application/octet-stream"
-        if tipo.startswith("text/") or tipo.endswith("javascript"):
-            tipo += "; charset=utf-8"
+        tipo = TIPOS.get(arquivo.suffix.lower(), "application/octet-stream")
         self._responder(200, corpo=arquivo.read_bytes(), tipo=tipo)
 
     def do_GET(self):
@@ -414,34 +477,30 @@ class Servidor(ThreadingHTTPServer):
     # vários caixas e telas abertas ao mesmo tempo: a fila padrão (5 conexões) recusaria pedidos em picos
     request_queue_size = 128
     daemon_threads = True
+    # no Windows, "reusar endereço" deixaria duas cópias do sistema abrirem na mesma porta
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        # o HTTPServer padrão consulta o nome do computador na rede, o que pode demorar segundos no Windows
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
-def criar_servidor(loja, host="127.0.0.1", porta=8080, silencioso=False):
-    manipulador = type("ManipuladorLoja", (Manipulador,), {"loja": loja, "silencioso": silencioso})
-    return Servidor((host, porta), manipulador)
+def criar_servidor(loja, host="127.0.0.1", porta=8080, silencioso=False, backups=None, ao_desligar=None):
+    atributos = {"loja": loja, "silencioso": silencioso, "backups": backups,
+                 "ao_desligar": staticmethod(ao_desligar) if ao_desligar else None}
+    servidor = Servidor((host, porta), type("ManipuladorLoja", (Manipulador,), atributos))
+    if host in ("127.0.0.1", "localhost"):
+        p = servidor.server_address[1]
+        servidor.RequestHandlerClass.hosts_permitidos = {f"127.0.0.1:{p}", f"localhost:{p}"}
+    return servidor
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Sistema para loja de material de construção")
-    parser.add_argument("--banco", default=os.environ.get("LOJA_BANCO", "loja.db"),
-                        help="arquivo do banco de dados (padrão: loja.db)")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="use 0.0.0.0 para acessar de outros computadores da rede")
-    parser.add_argument("--porta", type=int, default=8080)
-    args = parser.parse_args()
-    loja = Loja(args.banco)
-    servidor = criar_servidor(loja, args.host, args.porta)
-    print(f"Sistema da loja rodando em http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}"
-          f":{args.porta}  (banco: {os.path.abspath(args.banco)})")
-    print("Para encerrar, pressione Ctrl+C.")
-    try:
-        servidor.serve_forever()
-    except KeyboardInterrupt:
-        print("\nEncerrando...")
-    finally:
-        servidor.server_close()
-        loja.fechar()
+    from .aplicativo import main as principal
+    principal()
 
 
 if __name__ == "__main__":

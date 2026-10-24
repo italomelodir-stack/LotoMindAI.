@@ -109,6 +109,7 @@ const ICONES = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   chevron: '<path d="m9 18 6-6-6-6"/>',
   calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
 };
 const ic = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONES[n] || ""}</svg>`;
 
@@ -200,9 +201,23 @@ function confirmar(titulo, texto, { botao = "Confirmar", perigo = false } = {}) 
   });
 }
 
+// Imprime um documento (comprovante, orçamento, recibo) em A4.
 function imprimir(html) {
   $("#impressao").innerHTML = html;
+  document.body.classList.add("imprimir-doc");
   window.print();
+  setTimeout(() => document.body.classList.remove("imprimir-doc"), 500);
+}
+// Imprime a tela atual (relatórios, histórico) sem o menu e os botões, com um cabeçalho.
+function imprimirTela(titulo) {
+  $$(".cab-impressao").forEach((e) => e.remove());
+  const cab = document.createElement("div");
+  cab.className = "cab-impressao so-impressao";
+  cab.innerHTML = `<b>${esc(CONFIG.nome_loja)}</b><span>${esc(titulo)}</span><span>impresso em ${new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span>`;
+  $("#conteudo").prepend(cab);
+  document.body.classList.add("imprimir-tela");
+  window.print();
+  setTimeout(() => { document.body.classList.remove("imprimir-tela"); cab.remove(); }, 500);
 }
 
 // ============================================================= componentes
@@ -495,48 +510,88 @@ function graficoColunas(el, serie, {
   if (window.ResizeObserver) new ResizeObserver(() => { if (el.clientWidth) desenhar(); }).observe(el);
 }
 
-// =============================================================== recibos
-const cabecalhoRecibo = (titulo) => `<div style="text-align:center"><b>${esc(CONFIG.nome_loja)}</b><br>${esc(titulo)}</div><hr>`;
+// =============================================================== impressão (A4)
+// Documentos em folha A4 com os dados da loja (Configurações). Sem valor fiscal.
+const docTxt = (t) => esc(t).replace(/\n/g, "<br>");
+function cabecalhoDoc(titulo, numero, linhas = []) {
+  const L = CONFIG.loja || { nome_loja: CONFIG.nome_loja };
+  const doc = L.documento ? `${L.documento.length === 14 ? "CNPJ" : "CPF"} ${docFmt(L.documento)}` : "";
+  return `<header class="doc-cab"><div class="doc-loja"><div class="doc-nome">${esc(L.nome_loja)}</div>
+      ${[doc, L.telefone, L.email].filter(Boolean).length ? `<div>${[doc, L.telefone, L.email].filter(Boolean).map(esc).join(" · ")}</div>` : ""}
+      ${L.endereco ? `<div>${esc(L.endereco)}</div>` : ""}</div>
+    <div class="doc-id"><div class="doc-titulo">${titulo}</div>${numero ? `<div class="doc-num">Nº ${numero}</div>` : ""}${linhas.map((l) => `<div>${l}</div>`).join("")}</div></header>`;
+}
+function clienteDoc(nome, documento, telefone, endereco) {
+  const extra = [documento ? `${documento.length === 14 ? "CNPJ" : "CPF"} ${docFmt(documento)}` : "", telefone].filter(Boolean);
+  return `<section class="doc-bloco"><span class="doc-rot">Cliente</span><b>${esc(nome || "Consumidor")}</b>${extra.length ? ` · ${extra.map(esc).join(" · ")}` : ""}
+    ${endereco ? `<div>${esc(endereco)}</div>` : ""}</section>`;
+}
+const itensDoc = (itens) => `<table class="doc-itens"><thead><tr><th style="width:5%">#</th><th>Descrição</th><th class="num">Qtd</th><th>Un</th>
+  <th class="num">Valor unit.</th><th class="num">Total</th></tr></thead><tbody>
+  ${itens.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.descricao)}${i.quantidade_devolvida ? `<div class="doc-obs">devolvido: ${Q(i.quantidade_devolvida)} ${esc(i.unidade)} (${R(i.valor_devolvido)})</div>` : ""}</td>
+    <td class="num">${Q(i.quantidade)}</td><td>${esc(i.unidade)}</td><td class="num">${R(i.preco_unitario)}</td><td class="num">${R(i.total)}</td></tr>`).join("")}
+  </tbody></table>`;
+const linhaDoc = (rotulo, valor, cls = "") => `<div class="lt ${cls}"><span>${rotulo}</span><span>${valor}</span></div>`;
+const rodapeDoc = (texto) => `<footer class="doc-rodape">${texto ? `<div>${docTxt(texto)}</div>` : ""}
+  <div>Documento sem valor fiscal · impresso em ${new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</div></footer>`;
+const assinaturasDoc = (...nomes) => `<div class="doc-assinaturas">${nomes.map((n) => `<div>${n}</div>`).join("")}</div>`;
+
 function reciboVenda(v) {
-  return `<div class="recibo">${cabecalhoRecibo(`VENDA Nº ${v.id} — ${dataBR(v.data)}`)}
-    ${v.cliente ? `Cliente: ${esc(v.cliente)}<br>` : ""}${v.status === "CANCELADA" ? "<b>*** VENDA CANCELADA ***</b><br>" : ""}
-    <table><tr><th>Item</th><th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Total</th></tr>
-    ${v.itens.map((i) => `<tr><td>${esc(i.descricao)}</td><td class="num">${Q(i.quantidade)} ${esc(i.unidade)}</td><td class="num">${R(i.preco_unitario)}</td><td class="num">${R(i.total)}</td></tr>`).join("")}
-    </table><hr>
-    <div class="lt"><span>Subtotal</span><span>${R(v.subtotal)}</span></div>
-    ${v.desconto ? `<div class="lt"><span>Desconto</span><span>-${R(v.desconto)}</span></div>` : ""}
-    <div class="lt"><b>TOTAL</b><b>${R(v.total)}</b></div><hr>
-    ${v.pagamentos.map((p) => `<div class="lt"><span>${forma(p.forma)}</span><span>${R(p.valor)}</span></div>`).join("")}
-    ${v.troco ? `<div class="lt"><span>Troco</span><span>${R(v.troco)}</span></div>` : ""}
-    ${v.parcelas.length ? `<hr>Parcelas do crediário:<br>${v.parcelas.map((p) => `${p.parcela}/${p.total_parcelas} — venc. ${dataBR(p.vencimento)} — ${R(p.valor_original)}`).join("<br>")}
-      <br><br><br>_______________________________<br>Assinatura do cliente` : ""}
-    <hr><div style="text-align:center">Obrigado pela preferência!</div></div>`;
+  const L = CONFIG.loja || {};
+  const liquido = v.total - (v.total_devolvido || 0);
+  return `<div class="doc">${cabecalhoDoc("Comprovante de venda", v.id, [`Data: ${dataBR(v.data)}`])}
+    ${v.status === "CANCELADA" ? `<div class="doc-carimbo">Venda cancelada${v.motivo_cancelamento ? ` — ${esc(v.motivo_cancelamento)}` : ""}</div>` : ""}
+    ${clienteDoc(v.cliente, v.cliente_documento, v.cliente_telefone, v.cliente_endereco)}
+    ${itensDoc(v.itens)}
+    <div class="doc-colunas">
+      <div class="doc-bloco doc-pag"><span class="doc-rot">Pagamento</span>
+        ${v.pagamentos.map((p) => linhaDoc(forma(p.forma), R(p.valor))).join("")}
+        ${v.troco ? linhaDoc("Troco", R(v.troco)) : ""}</div>
+      <div class="doc-totais">${linhaDoc("Subtotal", R(v.subtotal))}${v.desconto ? linhaDoc("Desconto", "- " + R(v.desconto)) : ""}
+        ${linhaDoc("Total", R(v.total), "doc-total")}
+        ${v.total_devolvido ? linhaDoc("Devolvido", "- " + R(v.total_devolvido)) + linhaDoc("Total após devolução", R(liquido), "strong") : ""}</div>
+    </div>
+    ${v.parcelas.length ? `<section class="doc-bloco"><span class="doc-rot">Parcelas do crediário</span>
+      <table class="doc-itens doc-parcelas"><thead><tr><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th></tr></thead><tbody>
+      ${v.parcelas.map((p) => `<tr><td>${p.parcela}/${p.total_parcelas}</td><td>${dataBR(p.vencimento)}</td><td class="num">${R(p.valor_original)}</td></tr>`).join("")}</tbody></table>
+      <p class="doc-texto">Reconheço a dívida de <b>${R(v.parcelas.reduce((s, p) => s + p.valor_original, 0))}</b>
+        (${porExtenso(v.parcelas.reduce((s, p) => s + p.valor_original, 0))}) referente a esta compra e me comprometo a pagá-la nas datas acima.</p>
+      ${assinaturasDoc(`${esc(v.cliente || "Cliente")}`)}</section>` : ""}
+    ${v.observacao ? `<p class="doc-texto"><b>Observação:</b> ${docTxt(v.observacao)}</p>` : ""}
+    ${rodapeDoc(L.rodape_venda)}</div>`;
 }
 function reciboOrcamento(o) {
-  return `<div class="recibo">${cabecalhoRecibo(`ORÇAMENTO Nº ${o.id} — ${dataBR(o.data)}`)}
-    Cliente: ${esc(o.cliente || o.nome_cliente || "—")}<br>Válido até: ${dataBR(o.validade)}
-    <table><tr><th>Item</th><th class="num">Qtd</th><th class="num">Unit.</th><th class="num">Total</th></tr>
-    ${o.itens.map((i) => `<tr><td>${esc(i.descricao)}</td><td class="num">${Q(i.quantidade)} ${esc(i.unidade)}</td><td class="num">${R(i.preco_unitario)}</td><td class="num">${R(i.total)}</td></tr>`).join("")}
-    </table><hr>
-    <div class="lt"><span>Subtotal</span><span>${R(o.subtotal)}</span></div>
-    ${o.desconto ? `<div class="lt"><span>Desconto</span><span>-${R(o.desconto)}</span></div>` : ""}
-    <div class="lt"><b>TOTAL</b><b>${R(o.total)}</b></div>
-    ${o.observacao ? `<hr>${esc(o.observacao)}` : ""}<hr><div style="text-align:center">Orçamento sujeito à disponibilidade de estoque.</div></div>`;
+  const L = CONFIG.loja || {};
+  return `<div class="doc">${cabecalhoDoc("Orçamento", o.id, [`Data: ${dataBR(o.data).slice(0, 10)}`, `<b>Válido até: ${dataBR(o.validade)}</b>`])}
+    ${o.status === "CANCELADO" ? `<div class="doc-carimbo">Orçamento cancelado</div>` : ""}
+    ${clienteDoc(o.cliente || o.nome_cliente || "Não informado", o.cliente_documento, o.cliente_telefone, o.cliente_endereco)}
+    ${itensDoc(o.itens)}
+    <div class="doc-colunas"><div></div><div class="doc-totais">${linhaDoc("Subtotal", R(o.subtotal))}${o.desconto ? linhaDoc("Desconto", "- " + R(o.desconto)) : ""}
+      ${linhaDoc("Total", R(o.total), "doc-total")}</div></div>
+    ${o.observacao ? `<p class="doc-texto"><b>Observação:</b> ${docTxt(o.observacao)}</p>` : ""}
+    ${L.condicoes_orcamento ? `<section class="doc-bloco"><span class="doc-rot">Condições</span>${docTxt(L.condicoes_orcamento)}</section>` : ""}
+    ${assinaturasDoc(esc(L.nome_loja || ""), "De acordo — cliente")}
+    ${rodapeDoc("")}</div>`;
 }
 function reciboBaixa(b) {
-  return `<div class="recibo">${cabecalhoRecibo(`COMPROVANTE DE PAGAMENTO Nº ${b.id}`)}
-    Data: ${dataBR(b.data)}<br>Cliente: ${esc(b.cliente)}${b.cliente_documento ? `<br>CPF/CNPJ: ${esc(docFmt(b.cliente_documento))}` : ""}
-    ${b.status === "ESTORNADA" ? "<br><b>*** PAGAMENTO ESTORNADO ***</b>" : ""}<hr>
-    <table><tr><th>Referente a</th><th class="num">Pago</th></tr>
-    ${b.itens.map((i) => `<tr><td>Compra nº ${i.venda_id} — parc. ${i.parcela}/${i.total_parcelas}${i.status === "PAGA" ? " (quitada)" : ""}</td><td class="num">${R(i.valor)}</td></tr>`).join("")}
-    </table><hr>
-    <div class="lt"><b>VALOR PAGO</b><b>${R(b.valor)}</b></div>
-    <div class="lt"><span>Forma</span><span>${forma(b.forma)}</span></div>
-    ${b.troco ? `<div class="lt"><span>Entregue</span><span>${R(b.valor_recebido)}</span></div><div class="lt"><span>Troco</span><span>${R(b.troco)}</span></div>` : ""}
-    <hr><div class="lt"><span>Saldo anterior</span><span>${R(b.saldo_anterior)}</span></div>
-    <div class="lt"><b>SALDO DEVEDOR ATUAL</b><b>${R(b.saldo_apos)}</b></div>
-    ${b.observacao ? `<hr>${esc(b.observacao)}` : ""}
-    <br><br>_______________________________<br>${esc(CONFIG.nome_loja)}</div>`;
+  const L = CONFIG.loja || {};
+  const doc = b.cliente_documento ? `, ${b.cliente_documento.length === 14 ? "CNPJ" : "CPF"} ${docFmt(b.cliente_documento)},` : "";
+  return `<div class="doc">${cabecalhoDoc("Recibo de pagamento", b.id, [`Data: ${dataBR(b.data)}`, `<span class="doc-valor">${R(b.valor)}</span>`])}
+    ${b.status === "ESTORNADA" ? `<div class="doc-carimbo">Pagamento estornado${b.motivo_estorno ? ` — ${esc(b.motivo_estorno)}` : ""}</div>` : ""}
+    <p class="doc-texto doc-declara">Recebemos de <b>${esc(b.cliente)}</b>${esc(doc)} a importância de <b>${R(b.valor)}</b>
+      (${porExtenso(b.valor)}), em ${forma(b.forma).toLowerCase()}, referente ao pagamento de compras no crediário, conforme abaixo.</p>
+    <table class="doc-itens"><thead><tr><th>Compra</th><th>Parcela</th><th>Vencimento</th><th class="num">Valor pago</th><th>Situação da parcela</th></tr></thead><tbody>
+      ${b.itens.map((i) => `<tr><td>Nº ${i.venda_id}</td><td>${i.parcela}/${i.total_parcelas}</td><td>${dataBR(i.vencimento)}</td><td class="num">${R(i.valor)}</td>
+        <td>${i.estornado ? "estornado" : i.status === "PAGA" ? "quitada" : `resta ${R(i.restante)}`}</td></tr>`).join("")}</tbody></table>
+    <div class="doc-colunas">
+      <div class="doc-bloco"><span class="doc-rot">Pagamento</span>${linhaDoc(forma(b.forma), R(b.valor))}
+        ${b.troco ? linhaDoc("Valor entregue", R(b.valor_recebido)) + linhaDoc("Troco", R(b.troco)) : ""}</div>
+      <div class="doc-totais">${linhaDoc("Devia antes", R(b.saldo_anterior))}${linhaDoc("Valor pago", "- " + R(b.valor))}
+        ${linhaDoc("Ainda deve", R(b.saldo_apos), "doc-total")}</div>
+    </div>
+    ${b.observacao ? `<p class="doc-texto"><b>Observação:</b> ${docTxt(b.observacao)}</p>` : ""}
+    ${assinaturasDoc(esc(L.nome_loja || ""))}
+    ${rodapeDoc("")}</div>`;
 }
 
 // ================================================================= páginas
@@ -549,6 +604,7 @@ const TITULOS = {
   clientes: ["Clientes", "Cadastro e crédito"], fornecedores: ["Fornecedores", "Cadastro"], receber: ["Contas a receber", "Parcelas do crediário"],
   pagar: ["Contas a pagar", "Fornecedores e despesas"], relatorios: ["Relatórios", "Desempenho da loja"],
   cliente: ["Histórico do cliente", "Compras e pagamentos no período escolhido"],
+  configuracoes: ["Configurações", "Dados da loja, backup e sistema"],
 };
 const NAV = [
   [null, [["painel", "Painel", "dashboard"], ["pdv", "Vender", "cart", "F2"], ["receber-cliente", "Receber de cliente", "wallet", "F3"],
@@ -556,6 +612,7 @@ const NAV = [
   ["Estoque", [["produtos", "Produtos", "package"], ["compras", "Entrada de mercadoria", "truck"], ["movimentos", "Movimentações", "arrows"]]],
   ["Cadastros", [["clientes", "Clientes", "users"], ["fornecedores", "Fornecedores", "building"]]],
   ["Financeiro", [["receber", "Contas a receber", "down"], ["pagar", "Contas a pagar", "up"], ["relatorios", "Relatórios", "chart"]]],
+  ["Sistema", [["configuracoes", "Configurações", "sliders"]]],
 ];
 const avisoCaixaFechado = (texto) => `<div class="aviso-box mb">${ic("lock")}<div style="flex:1"><b>O caixa está fechado.</b> ${texto}</div><a class="btn sm" href="#caixa">Abrir caixa</a></div>`;
 
@@ -569,7 +626,8 @@ const listaFormas = (porForma) => {
     + `<div class="linha entre strong" style="border-top:1px solid var(--border);padding-top:10px"><span>Total</span><span class="num">${R(total)}</span></div>`;
 };
 paginas.painel = async (el) => {
-  const [p, baixo] = await Promise.all([GET("/api/painel"), GET("/api/produtos?estoque_baixo=1")]);
+  const [p, baixo, cfg] = await Promise.all([GET("/api/painel"), GET("/api/produtos?estoque_baixo=1"), GET("/api/config")]);
+  CONFIG.backup = cfg.backup;
   const v = p.vendas_hoje;
   const margem = v.liquido ? Math.round((v.lucro_bruto / v.liquido) * 100) : 0;
   el.innerHTML = `
@@ -577,6 +635,8 @@ paginas.painel = async (el) => {
       <div class="linha"><a class="btn primario" href="#pdv">${ic("cart")}Nova venda</a><a class="btn" href="#receber-cliente">${ic("wallet")}Receber de cliente</a>
       <a class="btn esconder-m" href="#compras">${ic("truck")}Entrada de mercadoria</a></div></div>
     ${p.caixa ? "" : avisoCaixaFechado("Abra o caixa para começar a vender e receber.")}
+    ${CONFIG.backup !== undefined && CONFIG.pode_desligar && !situacaoBackup(CONFIG.backup).ok
+      ? `<div class="aviso-box danger mb">${ic("alert")}<div style="flex:1"><b>Atenção ao backup:</b> ${esc(situacaoBackup(CONFIG.backup).texto)}</div><a class="btn sm" href="#configuracoes">Ver backup</a></div>` : ""}
     <div class="grid g-4">
       ${kpi({ rot: "Vendido hoje", val: R(v.liquido), det: `${v.quantidade} venda${v.quantidade === 1 ? "" : "s"} · <a href="#relatorios">no mês: ${R(p.vendas_mes.liquido)}</a>`, icone: "trend" })}
       ${kpi({ rot: "Lucro bruto hoje", val: R(v.lucro_bruto), det: v.liquido ? `margem de ${margem}% sobre as vendas` : "sem vendas ainda", icone: "chart", tom: "ok" })}
@@ -1491,19 +1551,7 @@ const ABAS_REL = {
             <dt>Zerados</dt><dd class="${est.sem_estoque.length ? "t-danger strong" : ""}">${est.sem_estoque.length}</dd></dl></div></div>
         </div>
       </div>
-      <div class="card mt"><div class="card-h"><div><h2>Segurança dos dados</h2><div class="sub">Confira se estoque, vendas, caixa e contas batem entre si, e faça cópias de segurança</div></div></div>
-        <div class="card-b"><div class="linha"><button class="btn" id="integridade">${ic("shield")}Conferir consistência</button><button class="btn" id="backup">${ic("download")}Fazer backup agora</button></div>
-        <div id="res-seg" class="mt-s"></div></div></div>`;
-    $("#integridade").onclick = async () => {
-      try {
-        const i = await GET("/api/integridade");
-        $("#res-seg").innerHTML = i.ok ? `<div class="aviso-box info">${ic("shield")}<div><b>Tudo confere.</b> Nenhuma diferença encontrada.</div></div>`
-          : `<div class="aviso-box danger">${ic("alert")}<div>${i.problemas.map(esc).join("<br>")}</div></div>`;
-      } catch (e) { erro(e); }
-    };
-    $("#backup").onclick = async () => {
-      try { const b = await POST("/api/backup"); $("#res-seg").innerHTML = `<div class="aviso-box info">${ic("download")}<div>Backup salvo em <b>${esc(b.arquivo)}</b></div></div>`; } catch (e) { erro(e); }
-    };
+`;
   },
 
   async meses(el, q) {
@@ -1567,9 +1615,12 @@ paginas.relatorios = async (el) => {
   CONFIG.primeira_venda = (await GET("/api/config")).primeira_venda;
   if (!periodoRel.inicio) [periodoRel.inicio, periodoRel.fim] = resolverPreset(periodoRel.preset);
   const f = filtroPeriodo(periodoRel, renderizar, PRESETS_MESES);
-  el.innerHTML = `${f.html}<div class="linha mb">${segmentado("aba-rel", [["resumo", "Resumo"], ["meses", "Mês a mês"], ["categorias", "Por categoria"], ["clientes", "Por cliente"]], abaRel)}</div>
+  const ABAS = [["resumo", "Resumo"], ["meses", "Mês a mês"], ["categorias", "Por categoria"], ["clientes", "Por cliente"]];
+  el.innerHTML = `${f.html}<div class="linha entre mb nao-imprimir">${segmentado("aba-rel", ABAS, abaRel)}
+      <button class="btn" id="imprimir-rel">${ic("printer")}Imprimir</button></div>
     <div id="rel-corpo"></div>`;
   f.ligar();
+  $("#imprimir-rel").onclick = () => imprimirTela(`Relatório: ${ABAS.find((a) => a[0] === abaRel)[1]} — ${dataBR(periodoRel.inicio)} a ${dataBR(periodoRel.fim)}`);
   aoSegmentar("aba-rel", (a) => { abaRel = a; renderizar(); });
   await ABAS_REL[abaRel]($("#rel-corpo"), `inicio=${periodoRel.inicio}&fim=${periodoRel.fim}`);
 };
@@ -1591,7 +1642,8 @@ paginas.cliente = async (el, param) => {
     <div class="card mb"><div class="card-b linha" style="gap:16px">
       <div class="pessoa" style="flex:1;min-width:240px">${avatar(c.nome, "g")}<div><div class="nome" style="font-size:17px">${esc(c.nome)}</div>
         <div class="muted small">${[docFmt(c.documento), c.telefone, c.endereco].filter(Boolean).map(esc).join(" · ") || "sem dados de contato"}</div></div></div>
-      <div class="linha">${c.saldo_devedor ? `<a class="btn primario" href="#receber-cliente/${c.id}">${ic("wallet")}Receber</a>` : ""}<a class="btn" href="#clientes">Voltar para clientes</a></div></div></div>
+      <div class="linha nao-imprimir">${c.saldo_devedor ? `<a class="btn primario" href="#receber-cliente/${c.id}">${ic("wallet")}Receber</a>` : ""}
+        <button class="btn" id="imprimir-hist">${ic("printer")}Imprimir</button><a class="btn" href="#clientes">Voltar para clientes</a></div></div></div>
     ${f.html.replace('class="filtros"', 'class="filtros" id="filtro-cliente"')}
     <div class="grid g-4">
       ${kpi({ rot: "Total comprado", val: R(r.liquido), det: `${r.quantidade} compra${r.quantidade === 1 ? "" : "s"} · ticket médio ${R(r.ticket_medio)}${r.devolucoes ? ` · devolveu ${R(r.devolucoes)}` : ""}`, icone: "cart" })}
@@ -1620,8 +1672,135 @@ paginas.cliente = async (el, param) => {
     ${h.baixas.length ? `<div class="card mt"><div class="card-h"><h2>Pagamentos do crediário no período</h2></div><div class="tabela"><table class="tbl-compacta"><thead><tr><th>Data</th><th>Forma</th><th class="num">Valor</th><th class="num">Ficou devendo</th><th>Situação</th></tr></thead><tbody>
       ${h.baixas.map((b) => `<tr><td>${dataBR(b.data)}</td><td>${forma(b.forma)}</td><td class="num strong">${R(b.valor)}</td><td class="num">${R(b.saldo_apos)}</td><td>${badge(b.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
   f.ligar();
+  $("#imprimir-hist").onclick = () => imprimirTela(`Histórico de ${c.nome} — ${dataBR(h.inicio)} a ${dataBR(h.fim)}`);
   graficoMeses($("#graf-cli"), h.por_mes);
   ligarCategorias(el);
+};
+
+// ------------------------------------------------------------ configurações
+const tamanhoTxt = (b) => (b >= 1048576 ? `${(b / 1048576).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+function situacaoBackup(ultimo) {
+  if (!ultimo) return { ok: false, texto: "Nenhum backup feito ainda." };
+  const dias = Math.floor((Date.now() - new Date(ultimo.data).getTime()) / 86400000);
+  if (ultimo.erro_extra) return { ok: false, texto: ultimo.erro_extra };
+  if (dias >= 2) return { ok: false, texto: `O último backup tem ${dias} dias.` };
+  return { ok: true, texto: `Último backup: ${dataBR(ultimo.data.replace("T", " "))} (${ultimo.motivo}).` };
+}
+const exemploVenda = () => ({
+  id: 123, data: `${CONFIG.hoje} 10:30:00`, status: "CONCLUIDA", cliente: "Construtora Exemplo Ltda", cliente_documento: "11444777000161",
+  cliente_telefone: "(11) 98888-1111", cliente_endereco: "Rua das Obras, 100 — Centro", subtotal: 76000, desconto: 1000, total: 75000,
+  itens: [{ descricao: "Cimento CP-II 50kg", quantidade: 10000, unidade: "SC", preco_unitario: 3890, total: 38900 },
+    { descricao: "Areia média", quantidade: 2500, unidade: "M3", preco_unitario: 14500, total: 36250 },
+    { descricao: "Fio flexível 2,5mm", quantidade: 5000, unidade: "M", preco_unitario: 170, total: 850 }],
+  pagamentos: [{ forma: "DINHEIRO", valor: 25000, troco: 0 }, { forma: "CREDIARIO", valor: 50000, troco: 0 }], troco: 0,
+  parcelas: [{ parcela: 1, total_parcelas: 2, vencimento: somarDias(CONFIG.hoje, 30), valor_original: 25000 },
+    { parcela: 2, total_parcelas: 2, vencimento: somarDias(CONFIG.hoje, 60), valor_original: 25000 }],
+  total_devolvido: 0, observacao: "",
+});
+
+paginas.configuracoes = async (el) => {
+  const [cfg, bk] = await Promise.all([GET("/api/configuracoes"), GET("/api/backups").catch(() => null)]);
+  const sit = bk ? situacaoBackup(bk.ultimo) : null;
+  el.innerHTML = `
+    <div class="grid g-2-1">
+      <div class="card"><div class="card-h"><div><h2>Dados da loja</h2><div class="sub">Aparecem no topo dos comprovantes, orçamentos e recibos impressos</div></div></div>
+        <div class="card-b"><form id="f-loja" class="form">
+          <label class="campo larg"><span>Nome da loja</span><input name="nome_loja" required value="${esc(cfg.nome_loja)}"></label>
+          <label class="campo"><span>CNPJ ou CPF</span><input name="documento" value="${esc(docFmt(cfg.documento))}"></label>
+          <label class="campo"><span>Telefone / WhatsApp</span><input name="telefone" value="${esc(cfg.telefone)}"></label>
+          <label class="campo larg"><span>Endereço</span><input name="endereco" value="${esc(cfg.endereco)}" placeholder="Rua, número, bairro, cidade"></label>
+          <label class="campo larg"><span>E-mail</span><input name="email" value="${esc(cfg.email)}"></label>
+          <label class="campo larg"><span>Mensagem no fim do comprovante de venda</span><textarea name="rodape_venda" rows="2">${esc(cfg.rodape_venda)}</textarea></label>
+          <label class="campo larg"><span>Condições do orçamento</span><textarea name="condicoes_orcamento" rows="3">${esc(cfg.condicoes_orcamento)}</textarea></label>
+          <div class="larg linha"><button type="submit" class="btn primario">${ic("check")}Salvar dados da loja</button>
+            <button type="button" class="btn" id="previa-doc">${ic("eye")}Ver como fica a impressão</button></div>
+        </form></div></div>
+      <div class="pilha">
+        <div class="card"><div class="card-h"><h2>Backup (cópia de segurança)</h2></div><div class="card-b">
+          ${bk ? `<div class="aviso-box ${sit.ok ? "info" : "danger"}">${ic(sit.ok ? "shield" : "alert")}<div>${esc(sit.texto)}</div></div>
+            <p class="sec small">O sistema faz backup sozinho <b>todo dia</b>, <b>ao fechar o caixa</b> e <b>ao fechar o sistema</b>.
+              Cada cópia é conferida antes de ser guardada.</p>
+            <div class="campo"><span>Pasta dos backups</span><input id="pasta-bk" readonly value="${esc(bk.pasta)}"></div>
+            <form id="f-extra" class="mt"><label class="campo"><span>Cópia extra <span class="ajuda">(pen drive, HD externo ou pasta do OneDrive/Google Drive)</span></span>
+              <div class="linha" style="flex-wrap:nowrap"><input name="pasta_backup_extra" value="${esc(cfg.pasta_backup_extra)}" placeholder="Ex.: E:\\ ou C:\\Users\\Loja\\OneDrive\\Backups">
+              <button class="btn" type="submit">Salvar</button></div></label></form>
+            <button class="btn primario bloco mt" id="bk-agora">${ic("download")}Fazer backup agora</button>`
+          : `<p class="muted">O backup automático só funciona quando o sistema é aberto pelo atalho da área de trabalho.</p>`}
+        </div></div>
+        <div class="card"><div class="card-h"><h2>Conferência dos dados</h2></div><div class="card-b">
+          <p class="sec small" style="margin-top:0">Confere se estoque, vendas, caixa e contas batem entre si.</p>
+          <button class="btn" id="integridade">${ic("shield")}Conferir agora</button><div id="res-seg" class="mt-s"></div></div></div>
+        <div class="card"><div class="card-h"><h2>Sistema</h2></div><div class="card-b">
+          <p class="sec small" style="margin-top:0">Versão ${esc(CONFIG.versao || "")}. Para abrir de novo depois de fechar, use o atalho <b>Sistema da Loja</b> na área de trabalho.</p>
+          ${CONFIG.pode_desligar ? `<button class="btn perigo" id="desligar">${ic("lock")}Fechar o sistema</button>` : ""}</div></div>
+      </div>
+    </div>
+    ${bk ? `<div class="card mt"><div class="card-h"><div><h2>Backups guardados</h2><div class="sub">Guardamos todos os dos últimos 7 dias e um por dia até 90 dias.
+      Restaurar volta os dados para como estavam naquele momento.</div></div></div>
+      <div class="card-b flush">${bk.lista.length ? `<div class="tabela"><table class="tbl-compacta"><thead><tr><th>Data e hora</th><th class="num">Tamanho</th><th></th></tr></thead><tbody>
+        ${bk.lista.map((b, i) => `<tr><td>${dataBR(b.data)}${i === 0 ? ` <span class="badge ok">mais recente</span>` : ""}</td><td class="num">${tamanhoTxt(b.tamanho)}</td>
+          <td class="acoes"><button class="btn sm restaurar" data-nome="${esc(b.nome)}" data-data="${esc(b.data)}">${ic("undo")}Restaurar</button></td></tr>`).join("")}</tbody></table></div>`
+        : vazio("download", "Nenhum backup ainda")}</div></div>` : ""}`;
+
+  $("#f-loja").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      CONFIG.loja = await PUT("/api/configuracoes", dadosForm(e.target));
+      CONFIG.nome_loja = CONFIG.loja.nome_loja;
+      montarMenu();
+      await atualizarCaixa();
+      avisar("Dados da loja salvos");
+      renderizar();
+    } catch (err) { erro(err); }
+  };
+  $("#previa-doc").onclick = () => {
+    const atual = CONFIG.loja;
+    CONFIG.loja = { ...cfg, ...dadosForm($("#f-loja")) };
+    CONFIG.loja.documento = (CONFIG.loja.documento || "").replace(/\D/g, "");
+    const c = abrirModal("Exemplo de comprovante (folha A4)", `<div class="folha">${reciboVenda(exemploVenda())}</div>`, "940px");
+    CONFIG.loja = atual;
+    c.scrollTop = 0;
+  };
+  $("#integridade").onclick = async () => {
+    try {
+      const i = await GET("/api/integridade");
+      $("#res-seg").innerHTML = i.ok ? `<div class="aviso-box info">${ic("shield")}<div><b>Tudo confere.</b> Nenhuma diferença encontrada.</div></div>`
+        : `<div class="aviso-box danger">${ic("alert")}<div>${i.problemas.map(esc).join("<br>")}</div></div>`;
+    } catch (e) { erro(e); }
+  };
+  if ($("#desligar")) $("#desligar").onclick = async () => {
+    if (!(await confirmar("Fechar o sistema", "O sistema faz um backup e fecha. Para abrir de novo, use o atalho <b>Sistema da Loja</b> na área de trabalho.", { botao: "Fechar o sistema", perigo: true }))) return;
+    try {
+      await POST("/api/desligar");
+      document.body.innerHTML = `<div class="fechado"><div class="brand-logo">${ic("bricks")}</div><h1>Sistema fechado</h1>
+        <p>Os dados foram guardados e o backup foi feito. Você já pode fechar esta janela.</p><p class="muted">Para abrir de novo, use o atalho <b>Sistema da Loja</b> na área de trabalho.</p></div>`;
+    } catch (e) { erro(e); }
+  };
+  if (!bk) return;
+  $("#f-extra").onsubmit = async (e) => {
+    e.preventDefault();
+    try { CONFIG.loja = await PUT("/api/configuracoes", dadosForm(e.target)); avisar("Pasta da cópia extra salva"); renderizar(); } catch (err) { erro(err); }
+  };
+  $("#bk-agora").onclick = async () => {
+    const b = $("#bk-agora");
+    b.disabled = true;
+    try {
+      const r = await POST("/api/backups");
+      CONFIG.backup = r;
+      avisar(r.erro_extra ? `Backup feito, mas: ${r.erro_extra}` : "Backup feito e conferido", r.erro_extra ? "erro" : "ok");
+      renderizar();
+    } catch (err) { erro(err); b.disabled = false; }
+  };
+  $$(".restaurar").forEach((b) => (b.onclick = () => modalForm("Restaurar backup", `
+    <div class="aviso-box danger larg">${ic("alert")}<div>Os dados vão voltar a ser como estavam em <b>${dataBR(b.dataset.data)}</b>.
+      Tudo o que foi feito depois disso (vendas, pagamentos, cadastros) <b>sai do sistema</b>.<br><br>
+      Antes de restaurar, o sistema guarda uma cópia do estado atual — se precisar, dá para voltar.</div></div>
+    <label class="check larg"><input type="checkbox" name="entendi" required> Entendi e quero restaurar este backup</label>`,
+  async () => {
+    await POST("/api/backups/restaurar", { nome: b.dataset.nome });
+    avisar("Backup restaurado");
+    setTimeout(() => location.reload(), 600);
+  }, { botao: "Restaurar", perigo: true, largura: "560px" })));
 };
 
 // ===================================================================== casca

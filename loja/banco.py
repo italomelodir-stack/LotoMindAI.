@@ -5,6 +5,11 @@ falhe no código, o banco recusa estoque negativo, pagamentos acima do devido et
 """
 
 ESQUEMA = """
+CREATE TABLE IF NOT EXISTS configuracoes (
+    chave TEXT PRIMARY KEY,
+    valor TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fornecedores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT NOT NULL,

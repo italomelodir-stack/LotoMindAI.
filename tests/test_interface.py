@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from loja import Loja
+from loja.backup import Backups
 from loja.servidor import criar_servidor
 
 SCRIPT = Path(__file__).with_name("interface.e2e.js")
@@ -25,7 +26,8 @@ class TestInterface(unittest.TestCase):
     def test_navegador(self):
         with tempfile.TemporaryDirectory() as pasta:
             loja = Loja(os.path.join(pasta, "loja.db"))
-            servidor = criar_servidor(loja, porta=0, silencioso=True)
+            servidor = criar_servidor(loja, porta=0, silencioso=True, backups=Backups(loja, os.path.join(pasta, "backups")),
+                                      ao_desligar=lambda: servidor.shutdown())
             threading.Thread(target=servidor.serve_forever, daemon=True).start()
             try:
                 r = subprocess.run(["node", str(SCRIPT), f"http://127.0.0.1:{servidor.server_address[1]}"],

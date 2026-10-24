@@ -1,3 +1,5 @@
-from .servidor import main
+import sys
 
-main()
+from .aplicativo import main
+
+sys.exit(main())

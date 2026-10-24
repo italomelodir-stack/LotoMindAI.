@@ -1,0 +1,4 @@
+# scripts do Windows: guardados com quebra de linha do Windows, sem conversão
+*.bat -text
+*.ps1 -text
+*.ico binary
