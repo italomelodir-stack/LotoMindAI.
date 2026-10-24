@@ -104,6 +104,18 @@ class TestAPI(unittest.TestCase):
         rel = c("GET", "/api/relatorios/vendas")
         self.assertEqual(rel["quantidade"], 3)
         self.assertEqual(rel["liquido"], 9960 + 24900 + 4980 - 2490)
+        hoje = c("GET", "/api/config")["hoje"]
+        meses = c("GET", f"/api/relatorios/por-mes?inicio={hoje[:8]}01&fim={hoje}")
+        self.assertEqual([m["liquido"] for m in meses], [rel["liquido"]])
+        cats = c("GET", f"/api/relatorios/por-categoria?inicio={hoje}&fim={hoje}")
+        self.assertEqual([(x["categoria"], x["valor"]) for x in cats], [("Argamassa", rel["liquido"])])
+        por_cliente = c("GET", f"/api/relatorios/por-cliente?inicio={hoje}&fim={hoje}")
+        self.assertEqual(sum(x["liquido"] for x in por_cliente), rel["liquido"])
+        h = c("GET", f"/api/clientes/{cli['id']}/historico")
+        self.assertEqual(h["resumo"]["liquido"], 24900)
+        self.assertEqual(len(h["compras"]), 2)          # a cancelada aparece na lista, mas não soma
+        c("GET", f"/api/relatorios/por-mes?inicio={hoje}&fim=2000-01-01", esperado=400)
+        c("GET", "/api/clientes/9999/historico", esperado=404)
         self.assertTrue(c("GET", "/api/integridade")["ok"])
         for caminho in ["/api/painel", "/api/config", "/api/vendas", "/api/orcamentos", "/api/movimentos",
                         "/api/contas-receber?vencidas=1", "/api/relatorios/mais-vendidos", "/api/relatorios/estoque",

@@ -305,6 +305,43 @@ async function principal() {
   await pagina.waitForSelector("#graf-tab:not(.oculto)");
   passo("relatórios conferem, gráfico mostra a dica ao passar o mouse e tem visão em tabela");
 
+  // 16b. mês a mês, por categoria, por cliente e histórico do cliente
+  await ir("relatorios");
+  await pagina.click("#periodo button[data-v='12m']");
+  await pagina.waitForSelector("#periodo button.on[data-v='12m']");
+  await pagina.click("#aba-rel button[data-v='meses']");
+  await pagina.waitForSelector("#graf-meses svg");
+  assert.strictEqual(await pagina.locator("#rel-corpo tbody tr").count(), 12, "12 meses na tabela");
+  assert.match(await texto("#rel-corpo tfoot"), /^Total 3 .*R\$ 590,30/);
+  await pagina.click("#aba-rel button[data-v='categorias']");
+  await pagina.waitForSelector(".cat-linha");
+  const linhasCat = (await pagina.locator(".cat-linha").allInnerTexts()).map((t) => t.replace(/\s+/g, " "));
+  assert.match(linhasCat[0], /Agregados .*R\$ 362,50/);
+  assert.match(linhasCat[1], /Cimento .*R\$ 227,80/);
+  assert.match(await texto("#rel-corpo tfoot"), /Total R\$ 590,30/);
+  await pagina.locator(".cat-linha").nth(1).click();
+  await pagina.waitForSelector(".cat-prod:not(.oculto) >> text=Cimento CP-II 50kg");
+  await pagina.click("#aba-rel button[data-v='clientes']");
+  await pagina.waitForSelector(".cli-rel");
+  const linhasCli = (await pagina.locator(".cli-rel").allInnerTexts()).map((t) => t.replace(/\s+/g, " "));
+  assert.match(linhasCli[0], /Construtora Boa Obra .*R\$ 362,50/);
+  assert.match(linhasCli[1], /Consumidor .*R\$ 227,80/);
+  await pagina.fill("#f-cli-rel", "constr");
+  assert.strictEqual(await pagina.locator(".cli-rel:not(.oculto)").count(), 1);
+  await pagina.click(".cli-rel .hist");
+  await pagina.waitForSelector("#titulo-pagina:has-text('Histórico do cliente')");
+  assert.strictEqual(await pagina.getAttribute("#periodo button.on", "data-v"), "12m", "histórico abre no mesmo período");
+  assert.match(await texto("#conteudo .kpi"), /Total comprado R\$ 362,50 1 compra/);
+  await pagina.click(".compra-det summary");
+  await pagina.waitForSelector(".compra-det[open] >> text=Areia média");
+  await pagina.click("#periodo button[data-v='tudo']");
+  await pagina.waitForSelector("#periodo button.on[data-v='tudo']");
+  assert.match(await texto("#conteudo .kpi"), /R\$ 362,50/);
+  await ir("clientes");
+  await pagina.click(`a[href='#cliente/${cliente.id}']`);
+  await pagina.waitForSelector("#titulo-pagina:has-text('Histórico do cliente')");
+  passo("relatórios mês a mês (12 meses), por categoria (com produtos), por cliente e histórico de cada cliente");
+
   // 17. tema escuro e atalho F2
   const fundoClaro = await pagina.evaluate(() => getComputedStyle(document.body).backgroundColor);
   await pagina.click("#tema-btn");
@@ -319,7 +356,7 @@ async function principal() {
 
   // 18. celular: nenhuma tela passa da largura e o menu abre
   await pagina.setViewportSize({ width: 390, height: 844 });
-  for (const p of [...PAGINAS, `receber-cliente/${cliente.id}`]) {
+  for (const p of [...PAGINAS, `receber-cliente/${cliente.id}`, `cliente/${cliente.id}`]) {
     await ir(p);
     const [sw, cw] = await pagina.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
     assert.ok(sw <= cw, `tela ${p} passa da largura do celular (${sw} > ${cw})`);

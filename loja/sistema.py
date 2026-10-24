@@ -1160,26 +1160,40 @@ class Loja:
         return contas
 
     # ------------------------------------------------------------- relatórios
-    def relatorio_vendas(self, inicio=None, fim=None):
-        inicio = v.data_iso(inicio or self.hoje())
-        fim = v.data_iso(fim or self.hoje())
+    def _periodo(self, inicio, fim, padrao_inicio=None):
+        inicio = v.data_iso(inicio) if inicio else (padrao_inicio or self.hoje())
+        fim = v.data_iso(fim) if fim else self.hoje()
         if fim < inicio:
             raise LojaError("A data final é anterior à inicial")
-        periodo = (inicio.isoformat(), fim.isoformat())
+        return inicio, fim
+
+    def _totais(self, inicio, fim, cliente_id=None):
+        """Totais das vendas concluídas no período (pela data da venda). Base de todos os relatórios."""
         filtro = "date(v.data) BETWEEN ? AND ? AND v.status = 'CONCLUIDA'"
+        args = [inicio.isoformat(), fim.isoformat()]
+        if cliente_id:
+            filtro += " AND v.cliente_id = ?"
+            args.append(cliente_id)
         r = self._um(
             f"SELECT COUNT(*) AS quantidade, IFNULL(SUM(subtotal), 0) AS bruto, IFNULL(SUM(desconto), 0)"
-            f" AS descontos, IFNULL(SUM(total), 0) AS total FROM vendas v WHERE {filtro}", *periodo)
-        r["inicio"], r["fim"] = periodo
+            f" AS descontos, IFNULL(SUM(total), 0) AS total FROM vendas v WHERE {filtro}", *args)
         r["devolucoes"] = self._escalar(
-            f"SELECT SUM(d.valor) FROM devolucoes d JOIN vendas v ON v.id = d.venda_id WHERE {filtro}", *periodo)
+            f"SELECT SUM(d.valor) FROM devolucoes d JOIN vendas v ON v.id = d.venda_id WHERE {filtro}", *args)
         r["liquido"] = r["total"] - r["devolucoes"]
         itens = self._todos(
             f"SELECT i.custo_unitario, i.quantidade - i.quantidade_devolvida AS qtd FROM venda_itens i"
-            f" JOIN vendas v ON v.id = i.venda_id WHERE {filtro}", *periodo)
+            f" JOIN vendas v ON v.id = i.venda_id WHERE {filtro}", *args)
         r["custo_mercadorias"] = sum(v.multiplicar(i["custo_unitario"], i["qtd"]) for i in itens)
         r["lucro_bruto"] = r["liquido"] - r["custo_mercadorias"]
         r["ticket_medio"] = r["total"] // r["quantidade"] if r["quantidade"] else 0
+        r["inicio"], r["fim"] = args[0], args[1]
+        return r
+
+    def relatorio_vendas(self, inicio=None, fim=None):
+        inicio, fim = self._periodo(inicio, fim)
+        periodo = (inicio.isoformat(), fim.isoformat())
+        filtro = "date(v.data) BETWEEN ? AND ? AND v.status = 'CONCLUIDA'"
+        r = self._totais(inicio, fim)
         r["canceladas"] = self._escalar(
             "SELECT COUNT(*) FROM vendas v WHERE date(v.data) BETWEEN ? AND ? AND v.status = 'CANCELADA'", *periodo)
         r["por_forma"] = {
@@ -1189,6 +1203,113 @@ class Loja:
         r["recebimentos_crediario"] = self._escalar(
             "SELECT SUM(valor) FROM recebimentos WHERE estornado = 0 AND date(data) BETWEEN ? AND ?", *periodo)
         return r
+
+    def primeira_venda(self, cliente_id=None):
+        sql = "SELECT MIN(date(data)) FROM vendas"
+        args = []
+        if cliente_id:
+            sql += " WHERE cliente_id = ?"
+            args.append(cliente_id)
+        d = self._escalar(sql, *args)
+        return datetime.date.fromisoformat(d) if d else self.hoje()
+
+    def vendas_por_mes(self, inicio=None, fim=None, cliente_id=None):
+        """Totais de cada mês do período (o primeiro e o último mês podem ser parciais)."""
+        inicio, fim = self._periodo(inicio, fim, self.primeira_venda(cliente_id).replace(day=1))
+        if (fim.year - inicio.year) * 12 + fim.month - inicio.month >= 600:
+            raise LojaError("Período longo demais para o relatório mês a mês (máximo 50 anos)")
+        meses = []
+        atual = inicio.replace(day=1)
+        while atual <= fim:
+            prox = v.somar_meses(atual, 1)
+            de, ate = max(atual, inicio), min(prox - datetime.timedelta(days=1), fim)
+            t = self._totais(de, ate, cliente_id)
+            t["mes"] = atual.strftime("%Y-%m")
+            meses.append(t)
+            atual = prox
+        return meses
+
+    def _itens_vendidos(self, inicio, fim, cliente_id=None):
+        filtro = "date(v.data) BETWEEN ? AND ? AND v.status = 'CONCLUIDA'"
+        args = [inicio.isoformat(), fim.isoformat()]
+        if cliente_id:
+            filtro += " AND v.cliente_id = ?"
+            args.append(cliente_id)
+        return self._todos(
+            "SELECT v.id AS venda_id, p.id AS produto_id, p.codigo, p.nome, p.unidade,"
+            " CASE WHEN TRIM(p.categoria) = '' THEN 'Sem categoria' ELSE TRIM(p.categoria) END AS categoria,"
+            " i.quantidade - i.quantidade_devolvida AS qtd, i.total_liquido - i.valor_devolvido AS valor, i.custo_unitario"
+            f" FROM venda_itens i JOIN vendas v ON v.id = i.venda_id JOIN produtos p ON p.id = i.produto_id WHERE {filtro}",
+            *args)
+
+    def vendas_por_categoria(self, inicio=None, fim=None, cliente_id=None):
+        """Quanto foi vendido de cada categoria (elétrica, hidráulica...), já descontando devoluções,
+        com o custo, o lucro e os produtos de cada uma."""
+        inicio, fim = self._periodo(inicio, fim, self.primeira_venda(cliente_id) if cliente_id else None)
+        cats = {}
+        for i in self._itens_vendidos(inicio, fim, cliente_id):
+            c = cats.setdefault(i["categoria"], {"categoria": i["categoria"], "valor": 0, "custo": 0, "vendas": set(), "produtos": {}})
+            custo = v.multiplicar(i["custo_unitario"], i["qtd"])
+            c["valor"] += i["valor"]
+            c["custo"] += custo
+            c["vendas"].add(i["venda_id"])
+            p = c["produtos"].setdefault(i["produto_id"], {"produto_id": i["produto_id"], "codigo": i["codigo"], "nome": i["nome"],
+                                                         "unidade": i["unidade"], "quantidade": 0, "valor": 0})
+            p["quantidade"] += i["qtd"]
+            p["valor"] += i["valor"]
+        resultado = []
+        for c in cats.values():
+            c["vendas"] = len(c["vendas"])
+            c["lucro"] = c["valor"] - c["custo"]
+            c["produtos"] = sorted((p for p in c["produtos"].values() if p["quantidade"] or p["valor"]),
+                                   key=lambda p: (-p["valor"], p["nome"]))
+            if c["valor"] or c["produtos"]:
+                resultado.append(c)
+        return sorted(resultado, key=lambda c: (-c["valor"], c["categoria"]))
+
+    def vendas_por_cliente(self, inicio=None, fim=None):
+        """Quanto cada cliente comprou no período. Vendas sem cliente aparecem como 'Consumidor'."""
+        inicio, fim = self._periodo(inicio, fim)
+        linhas = self._todos(
+            "SELECT v.cliente_id, c.nome, c.telefone, c.documento, COUNT(*) AS compras, SUM(v.total) AS total,"
+            " SUM(v.desconto) AS descontos,"
+            " SUM(IFNULL((SELECT SUM(valor) FROM devolucoes d WHERE d.venda_id = v.id), 0)) AS devolvido,"
+            " MIN(v.data) AS primeira, MAX(v.data) AS ultima"
+            " FROM vendas v LEFT JOIN clientes c ON c.id = v.cliente_id"
+            " WHERE v.status = 'CONCLUIDA' AND date(v.data) BETWEEN ? AND ? GROUP BY v.cliente_id",
+            inicio.isoformat(), fim.isoformat())
+        for r in linhas:
+            r["liquido"] = r["total"] - r["devolvido"]
+            r["ticket_medio"] = r["total"] // r["compras"]
+            r["saldo_devedor"] = self._saldo_devedor(r["cliente_id"]) if r["cliente_id"] else 0
+            if not r["cliente_id"]:
+                r["nome"] = "Consumidor (venda sem cliente)"
+        return sorted(linhas, key=lambda r: (-r["liquido"], r["nome"] or ""))
+
+    def historico_cliente(self, cliente_id, inicio=None, fim=None):
+        """Tudo que o cliente comprou e pagou no período (padrão: desde a primeira compra)."""
+        cliente = self.obter_cliente(cliente_id)
+        inicio, fim = self._periodo(inicio, fim, self.primeira_venda(cliente_id))
+        periodo = (inicio.isoformat(), fim.isoformat())
+        compras = self.listar_vendas(inicio, fim, cliente_id=cliente_id, limite=100000)
+        itens = {}
+        if compras:
+            ids = [c["id"] for c in compras]
+            for i in self._todos(f"SELECT * FROM venda_itens WHERE venda_id IN ({','.join('?' * len(ids))}) ORDER BY id", *ids):
+                itens.setdefault(i["venda_id"], []).append(i)
+        for c in compras:
+            c["itens"] = itens.get(c["id"], [])
+        baixas = [b for b in self.listar_baixas(cliente_id, inicio, fim, limite=100000)]
+        return {
+            "cliente": cliente,
+            "inicio": periodo[0], "fim": periodo[1],
+            "resumo": self._totais(inicio, fim, cliente_id),
+            "pago_crediario": sum(b["valor"] for b in baixas if b["status"] == "ATIVA"),
+            "por_mes": self.vendas_por_mes(inicio, fim, cliente_id),
+            "por_categoria": self.vendas_por_categoria(inicio, fim, cliente_id),
+            "compras": compras,
+            "baixas": baixas,
+        }
 
     def vendas_por_dia(self, dias=14):
         """Faturamento líquido (vendas menos devoluções) de cada um dos últimos `dias` dias."""
@@ -1235,6 +1356,7 @@ class Loja:
         return {
             "data": hoje,
             "vendas_hoje": self.relatorio_vendas(hoje, hoje),
+            "vendas_mes": self._totais(self.hoje().replace(day=1), self.hoje()),
             "caixa": None if not caixa else {
                 "id": caixa["id"], "abertura": caixa["abertura"], "saldo_dinheiro": caixa["saldo_dinheiro"],
                 "totais_por_forma": caixa["totais_por_forma"]},

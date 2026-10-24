@@ -34,7 +34,8 @@ def config(loja, q, corpo):
     return {"unidades": UNIDADES, "fracionaveis": sorted(FRACIONAVEIS), "formas_pagamento": FORMAS_PAGAMENTO,
             "formas_recebimento": FORMAS_RECEBIMENTO, "formas_reembolso": FORMAS_REEMBOLSO,
             "formas_pagamento_conta": FORMAS_PAGAMENTO_CONTA, "hoje": loja.hoje().isoformat(),
-            "nome_loja": os.environ.get("LOJA_NOME", "Loja de Materiais de Construção")}
+            "nome_loja": os.environ.get("LOJA_NOME", "Loja de Materiais de Construção"),
+            "primeira_venda": loja.primeira_venda().isoformat()}
 
 
 @rota("GET", "/api/painel")
@@ -146,6 +147,11 @@ def receber_cliente(loja, q, corpo, cid):
 @rota("GET", r"/api/clientes/(?P<cid>\d+)/debitos")
 def debitos(loja, q, corpo, cid):
     return {"cliente": loja.obter_cliente(int(cid)), "compras": loja.debitos_cliente(int(cid))}
+
+
+@rota("GET", r"/api/clientes/(?P<cid>\d+)/historico")
+def historico(loja, q, corpo, cid):
+    return loja.historico_cliente(int(cid), q.get("inicio") or None, q.get("fim") or None)
 
 
 @rota("POST", r"/api/clientes/(?P<cid>\d+)/baixa")
@@ -287,6 +293,21 @@ def rel_vendas(loja, q, corpo):
 @rota("GET", "/api/relatorios/vendas-por-dia")
 def rel_vendas_dia(loja, q, corpo):
     return loja.vendas_por_dia(q.get("dias", 14))
+
+
+@rota("GET", "/api/relatorios/por-mes")
+def rel_por_mes(loja, q, corpo):
+    return loja.vendas_por_mes(q.get("inicio") or None, q.get("fim") or None)
+
+
+@rota("GET", "/api/relatorios/por-categoria")
+def rel_por_categoria(loja, q, corpo):
+    return loja.vendas_por_categoria(q.get("inicio") or None, q.get("fim") or None)
+
+
+@rota("GET", "/api/relatorios/por-cliente")
+def rel_por_cliente(loja, q, corpo):
+    return loja.vendas_por_cliente(q.get("inicio") or None, q.get("fim") or None)
 
 
 @rota("GET", "/api/relatorios/mais-vendidos")

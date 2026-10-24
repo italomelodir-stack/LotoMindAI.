@@ -48,6 +48,7 @@ class Simulacao(unittest.TestCase):
         for nome, un, preco, custo in catalogo:
             inicial = rnd.randint(0, 300) * 1000
             p = loja.cadastrar_produto({"nome": nome, "unidade": un, "preco_venda": reais(preco),
+                                        "categoria": rnd.choice(["Básico", "Elétrica", "Hidráulica", "Acabamento", ""]),
                                         "preco_custo": reais(custo), "estoque_inicial": qtd_txt(inicial)})
             produtos.append(p)
             estoque[p["id"]] = inicial
@@ -345,6 +346,26 @@ class Simulacao(unittest.TestCase):
         self.assertEqual(total_pagar, estado["a_pagar"])
         r = loja.relatorio_vendas("2000-01-01", "2100-01-01")
         self.assertEqual(r["liquido"], estado["faturado"])
+        # os relatórios mês a mês, por categoria e por cliente têm que somar exatamente o total
+        inicio, fim = loja.primeira_venda().isoformat(), relogio.data.isoformat()
+        r = loja.relatorio_vendas(inicio, fim)
+        self.assertEqual(r["liquido"], estado["faturado"])
+        meses = loja.vendas_por_mes(inicio, fim)
+        self.assertGreater(len(meses), 1)
+        self.assertEqual(sum(m["liquido"] for m in meses), r["liquido"])
+        self.assertEqual(sum(m["lucro_bruto"] for m in meses), r["lucro_bruto"])
+        cats = loja.vendas_por_categoria(inicio, fim)
+        self.assertEqual(sum(c["valor"] for c in cats), r["liquido"])
+        self.assertEqual(sum(c["custo"] for c in cats), r["custo_mercadorias"])
+        self.assertEqual(sum(p["valor"] for c in cats for p in c["produtos"]), r["liquido"])
+        por_cliente = loja.vendas_por_cliente(inicio, fim)
+        self.assertEqual(sum(c["liquido"] for c in por_cliente), r["liquido"])
+        for c in por_cliente:
+            if c["cliente_id"]:
+                h = loja.historico_cliente(c["cliente_id"], inicio, fim)
+                self.assertEqual(h["resumo"]["liquido"], c["liquido"])
+                self.assertEqual(sum(m["liquido"] for m in h["por_mes"]), c["liquido"])
+                self.assertEqual(sum(x["valor"] for x in h["por_categoria"]), c["liquido"])
         self.assertGreater(contadores["ok"], self.OPERACOES // 2)
         self.assertGreater(len(vendas), 300)
         loja.fechar()

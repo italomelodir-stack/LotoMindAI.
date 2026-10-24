@@ -24,6 +24,12 @@ const somarDias = (iso, n) => {
   const [a, m, d] = iso.split("-").map(Number);
   return new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
 };
+const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const mesCurto = (ym) => { const [a, m] = ym.split("-"); return `${MESES[Number(m) - 1]}/${a.slice(2)}`; };
+const mesLongo = (ym) => { const [a, m] = ym.split("-").map(Number); return new Date(Date.UTC(a, m - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }); };
+const maiuscula = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+const inicioMes = (iso, delta = 0) => { const [a, m] = iso.split("-").map(Number); return new Date(Date.UTC(a, m - 1 + delta, 1)).toISOString().slice(0, 10); };
+const pct = (parte, todo) => (todo ? ((parte / todo) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%" : "—");
 const compacto = (c) => {
   const r = (c || 0) / 100;
   const f = (x) => x.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
@@ -101,6 +107,8 @@ const ICONES = {
   unlock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
   checkc: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
 };
 const ic = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONES[n] || ""}</svg>`;
 
@@ -420,11 +428,15 @@ function passoBonito(x) {
   const n = x / mag;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
 }
-function graficoColunas(el, serie) {
+function graficoColunas(el, serie, {
+  rotulo = (s, i, ultimo) => (ultimo ? "Hoje" : diaMes(s.data)),
+  dica = (s) => [R(s.total), `${dataBR(s.data)} · ${s.quantidade} venda${s.quantidade === 1 ? "" : "s"}`],
+  titulo = "Faturamento por dia",
+} = {}) {
   const NS = "http://www.w3.org/2000/svg";
   el.classList.add("grafico");
-  el.innerHTML = `<svg role="img" aria-label="Faturamento por dia"></svg><div class="dica oculto"><b></b><span></span></div>`;
-  const svg = $("svg", el), dica = $(".dica", el);
+  el.innerHTML = `<svg role="img" aria-label="${esc(titulo)}"></svg><div class="dica oculto"><b></b><span></span></div>`;
+  const svg = $("svg", el), caixaDica = $(".dica", el);
   const no = (tag, attrs, txt) => { const n = document.createElementNS(NS, tag); for (const k in attrs) n.setAttribute(k, attrs[k]); if (txt != null) n.textContent = txt; return n; };
   let largura = 0;
   function desenhar() {
@@ -457,20 +469,21 @@ function graficoColunas(el, serie) {
           svg.appendChild(no("text", { x: x + bw / 2, y: t - 7, "text-anchor": "middle", class: "rotulo" }, compacto(s.total)));
       }
       if ((serie.length - 1 - i) % cada === 0)
-        svg.appendChild(no("text", { x: mL + i * banda + banda / 2, y: H - 6, "text-anchor": "middle", class: "eixo-txt" }, i === serie.length - 1 ? "Hoje" : diaMes(s.data)));
+        svg.appendChild(no("text", { x: mL + i * banda + banda / 2, y: H - 6, "text-anchor": "middle", class: "eixo-txt" }, rotulo(s, i, i === serie.length - 1)));
+      const [principal, secundario] = dica(s);
       const alvo = no("rect", { x: mL + i * banda, y: mT, width: banda, height: ph, class: "alvo", tabindex: 0, "data-i": i,
-        "aria-label": `${dataBR(s.data)}: ${R(s.total)}, ${s.quantidade} venda(s)` });
+        "aria-label": `${secundario}: ${principal}` });
       const mostrar = () => {
         el.classList.add("hover");
         $$(".barra", svg).forEach((b) => b.classList.toggle("ativa", Number(b.dataset.i) === i));
-        $("b", dica).textContent = R(s.total);
-        $("span", dica).textContent = `${dataBR(s.data)} · ${s.quantidade} venda${s.quantidade === 1 ? "" : "s"}`;
-        dica.classList.remove("oculto");
+        $("b", caixaDica).textContent = principal;
+        $("span", caixaDica).textContent = secundario;
+        caixaDica.classList.remove("oculto");
         const k = el.clientWidth / W;
-        dica.style.left = Math.min(Math.max((x + bw / 2) * k, 70), el.clientWidth - 70) + "px";
-        dica.style.top = (Math.min(y(s.total), base - 2) - 10) * k + "px";
+        caixaDica.style.left = Math.min(Math.max((x + bw / 2) * k, 90), el.clientWidth - 90) + "px";
+        caixaDica.style.top = (Math.min(y(s.total), base - 2) - 10) * k + "px";
       };
-      const esconder = () => { el.classList.remove("hover"); dica.classList.add("oculto"); };
+      const esconder = () => { el.classList.remove("hover"); caixaDica.classList.add("oculto"); };
       alvo.addEventListener("pointerenter", mostrar);
       alvo.addEventListener("focus", mostrar);
       alvo.addEventListener("pointerleave", esconder);
@@ -535,6 +548,7 @@ const TITULOS = {
   compras: ["Entrada de mercadoria", "Compras de fornecedores"], movimentos: ["Movimentações", "Tudo que entrou e saiu do estoque"],
   clientes: ["Clientes", "Cadastro e crédito"], fornecedores: ["Fornecedores", "Cadastro"], receber: ["Contas a receber", "Parcelas do crediário"],
   pagar: ["Contas a pagar", "Fornecedores e despesas"], relatorios: ["Relatórios", "Desempenho da loja"],
+  cliente: ["Histórico do cliente", "Compras e pagamentos no período escolhido"],
 };
 const NAV = [
   [null, [["painel", "Painel", "dashboard"], ["pdv", "Vender", "cart", "F2"], ["receber-cliente", "Receber de cliente", "wallet", "F3"],
@@ -564,7 +578,7 @@ paginas.painel = async (el) => {
       <a class="btn esconder-m" href="#compras">${ic("truck")}Entrada de mercadoria</a></div></div>
     ${p.caixa ? "" : avisoCaixaFechado("Abra o caixa para começar a vender e receber.")}
     <div class="grid g-4">
-      ${kpi({ rot: "Vendido hoje", val: R(v.liquido), det: `${v.quantidade} venda${v.quantidade === 1 ? "" : "s"} · ticket médio ${R(v.ticket_medio)}`, icone: "trend" })}
+      ${kpi({ rot: "Vendido hoje", val: R(v.liquido), det: `${v.quantidade} venda${v.quantidade === 1 ? "" : "s"} · <a href="#relatorios">no mês: ${R(p.vendas_mes.liquido)}</a>`, icone: "trend" })}
       ${kpi({ rot: "Lucro bruto hoje", val: R(v.lucro_bruto), det: v.liquido ? `margem de ${margem}% sobre as vendas` : "sem vendas ainda", icone: "chart", tom: "ok" })}
       ${kpi({ rot: "Dinheiro no caixa", val: p.caixa ? R(p.caixa.saldo_dinheiro) : "Fechado", det: p.caixa ? `aberto em ${dataBR(p.caixa.abertura)}` : "abra o caixa para vender", icone: "banknote", tom: "info" })}
       ${kpi({ rot: "A receber dos clientes", val: R(p.receber_aberto), det: p.receber_vencido ? `<span class="t-danger">${R(p.receber_vencido)} vencido</span>` : "nada vencido", icone: "wallet", tom: p.receber_vencido ? "danger" : "warn" })}
@@ -934,19 +948,29 @@ async function escolherClienteParaReceber(el) {
 }
 
 // ------------------------------------------------------------------ vendas
-function filtroPeriodo(estado, aoMudar) {
-  const presets = [["hoje", "Hoje"], ["7", "7 dias"], ["30", "30 dias"], ["mes", "Este mês"]];
+const PRESETS_DIAS = [["hoje", "Hoje"], ["7", "7 dias"], ["30", "30 dias"], ["mes", "Este mês"]];
+const PRESETS_MESES = [["mes", "Este mês"], ["3m", "3 meses"], ["6m", "6 meses"], ["12m", "12 meses"], ["ano", "Este ano"], ["tudo", "Tudo"]];
+function resolverPreset(v) {
+  const h = CONFIG.hoje;
+  if (v === "hoje") return [h, h];
+  if (v === "mes") return [inicioMes(h), h];
+  if (v === "ano") return [h.slice(0, 4) + "-01-01", h];
+  if (v === "tudo") return [CONFIG.primeira_venda || h, h];
+  if (v.endsWith("m")) return [inicioMes(h, -(parseInt(v, 10) - 1)), h];
+  return [somarDias(h, -(Number(v) - 1)), h];
+}
+function filtroPeriodo(estado, aoMudar, presets = PRESETS_DIAS) {
   const html = `<div class="filtros">${segmentado("periodo", presets, estado.preset)}
     <label class="campo" style="min-width:150px"><span>De</span><input type="date" id="p-ini" value="${estado.inicio}"></label>
     <label class="campo" style="min-width:150px"><span>Até</span><input type="date" id="p-fim" value="${estado.fim}"></label></div>`;
   const ligar = () => {
     aoSegmentar("periodo", (v) => {
-      const h = CONFIG.hoje;
-      Object.assign(estado, { preset: v, fim: h, inicio: v === "hoje" ? h : v === "mes" ? h.slice(0, 8) + "01" : somarDias(h, -(Number(v) - 1)) });
+      const [inicio, fim] = resolverPreset(v);
+      Object.assign(estado, { preset: v, inicio, fim });
       aoMudar();
     });
-    $("#p-ini").onchange = (e) => { Object.assign(estado, { inicio: e.target.value, preset: "" }); aoMudar(); };
-    $("#p-fim").onchange = (e) => { Object.assign(estado, { fim: e.target.value, preset: "" }); aoMudar(); };
+    $("#p-ini").onchange = (e) => { if (e.target.value) { Object.assign(estado, { inicio: e.target.value, preset: "" }); aoMudar(); } };
+    $("#p-fim").onchange = (e) => { if (e.target.value) { Object.assign(estado, { fim: e.target.value, preset: "" }); aoMudar(); } };
   };
   return { html, ligar };
 }
@@ -1305,14 +1329,13 @@ paginas.clientes = async (el) => {
       <td>${esc(c.telefone)}</td><td class="num">${R(c.limite_credito)}</td>
       <td class="num">${c.saldo_devedor ? `<b class="${c.valor_vencido ? "t-danger" : ""}">${R(c.saldo_devedor)}</b>${c.valor_vencido ? `<span class="sub t-danger">${R(c.valor_vencido)} vencido</span>` : ""}` : `<span class="muted">—</span>`}</td>
       <td class="acoes">${c.saldo_devedor ? `<a class="btn sm primario" href="#receber-cliente/${c.id}">${ic("wallet")}Receber</a>` : ""}
-        <button class="btn sm ex" data-id="${c.id}">${ic("eye")}Extrato</button><button class="btn sm icone fantasma ed" data-id="${c.id}" title="Editar" aria-label="Editar">${ic("pencil")}</button></td></tr>`).join("")}</tbody></table>`
+        <a class="btn sm" href="#cliente/${c.id}">${ic("history")}Histórico</a><button class="btn sm icone fantasma ed" data-id="${c.id}" title="Editar" aria-label="Editar">${ic("pencil")}</button></td></tr>`).join("")}</tbody></table>`
       : vazio("users", "Nenhum cliente encontrado", "", `<button class="btn sm primario" id="novo2">${ic("plus")}Cadastrar cliente</button>`)}</div></div>`;
   buscaAoVivo($("#f-busca"), (v) => (buscaCliente = v));
   const porId = Object.fromEntries(lista.map((c) => [c.id, c]));
   $("#novo").onclick = () => formCliente(null);
   if ($("#novo2")) $("#novo2").onclick = () => formCliente(null);
   $$(".ed").forEach((b) => (b.onclick = () => formCliente(porId[b.dataset.id])));
-  $$(".ex").forEach((b) => (b.onclick = () => extratoCliente(b.dataset.id).catch(erro)));
 };
 
 function formCliente(c) {
@@ -1327,20 +1350,6 @@ function formCliente(c) {
     <label class="campo larg"><span>Endereço</span><input name="endereco" value="${esc(c.endereco)}"></label>
     ${novo ? "" : `<label class="check larg"><input type="checkbox" name="ativo" ${c.ativo ? "checked" : ""}> Cliente ativo</label>`}`,
   (d) => (novo ? POST("/api/clientes", d) : PUT(`/api/clientes/${c.id}`, d)), { msg: "Cliente salvo" });
-}
-
-async function extratoCliente(id) {
-  const c = await GET("/api/clientes/" + id);
-  const m = abrirModal("Extrato do cliente", `
-    <div class="pessoa mb">${avatar(c.nome, "g")}<div><div class="nome" style="font-size:17px">${esc(c.nome)}</div><div class="muted small">${[docFmt(c.documento), c.telefone, c.endereco].filter(Boolean).map(esc).join(" · ")}</div></div></div>
-    <div class="grid g-3">${kpi({ rot: "Deve", val: R(c.saldo_devedor), icone: "wallet", tom: "warn" })}${kpi({ rot: "Vencido", val: R(c.valor_vencido), icone: "alert", tom: c.valor_vencido ? "danger" : "ok" })}
-      ${kpi({ rot: "Limite livre", val: R(c.credito_disponivel), icone: "card", tom: "info" })}</div>
-    ${c.saldo_devedor ? `<div class="linha mt"><a class="btn primario" href="#receber-cliente/${c.id}">${ic("wallet")}Receber pagamento</a></div>` : ""}
-    <h3 class="mt mb">Pagamentos</h3><div class="card">${c.baixas.length ? `<table class="tbl-compacta"><tbody>${c.baixas.map((b) => `<tr><td>${dataBR(b.data)}</td><td>${forma(b.forma)}</td>
-      <td class="num strong">${R(b.valor)}</td><td>${badge(b.status)}</td></tr>`).join("")}</tbody></table>` : vazio("history", "Nenhum pagamento")}</div>
-    <h3 class="mt mb">Compras</h3><div class="card">${c.vendas.length ? `<table class="tbl-compacta"><tbody>${c.vendas.map((v) => `<tr><td>nº ${v.id}</td><td>${dataBR(v.data)}</td>
-      <td class="num strong">${R(v.total)}</td><td>${badge(v.status)}</td></tr>`).join("")}</tbody></table>` : vazio("receipt", "Nenhuma compra")}</div>`, "760px");
-  $$("a", m).forEach((a) => a.addEventListener("click", fecharModal));
 }
 
 // ------------------------------------------------------------- fornecedores
@@ -1425,44 +1434,194 @@ paginas.pagar = async (el) => {
 
 // --------------------------------------------------------------- relatórios
 const periodoRel = { preset: "mes", inicio: "", fim: "" };
+let abaRel = "resumo";
+const margemTxt = (lucro, valor) => (valor ? pct(lucro, valor) : "—");
+
+// Lista de categorias com barra proporcional; clicar abre os produtos daquela categoria.
+function tabelaCategorias(cats, { comLucro = true } = {}) {
+  const total = cats.reduce((s, c) => s + c.valor, 0);
+  const maior = Math.max(1, ...cats.map((c) => c.valor));
+  return `<table class="tbl-cat"><thead><tr><th>Categoria</th><th class="esconder-m" style="width:30%">Participação</th><th class="num">Vendido</th>
+      ${comLucro ? `<th class="num esconder-m">Lucro bruto</th><th class="num esconder-m">Margem</th>` : `<th class="num">% do total</th>`}<th></th></tr></thead><tbody>
+    ${cats.map((c, i) => `<tr class="cat-linha" data-i="${i}" tabindex="0" aria-expanded="false"><td><b>${esc(c.categoria)}</b><span class="sub">${c.produtos.length} produto${c.produtos.length === 1 ? "" : "s"} · em ${c.vendas} venda${c.vendas === 1 ? "" : "s"}</span></td>
+      <td class="esconder-m"><div class="linha" style="flex-wrap:nowrap"><div class="barra-prop" style="flex:1;margin:0"><i style="width:${(Math.max(c.valor, 0) / maior) * 100}%"></i></div><span class="num small muted" style="width:52px">${pct(c.valor, total)}</span></div></td>
+      <td class="num strong">${R(c.valor)}</td>
+      ${comLucro ? `<td class="num esconder-m">${R(c.lucro)}</td><td class="num esconder-m">${margemTxt(c.lucro, c.valor)}</td>` : `<td class="num">${pct(c.valor, total)}</td>`}
+      <td class="acoes"><span class="chev">${ic("chevron")}</span></td></tr>
+    <tr class="cat-prod oculto" data-i="${i}"><td colspan="${comLucro ? 6 : 5}" style="padding:0"><table class="tbl-compacta sub-tabela"><thead><tr><th>Produto</th><th class="num">Quantidade</th><th class="num">Valor</th><th class="num">Da categoria</th></tr></thead><tbody>
+      ${c.produtos.map((p) => `<tr><td>${esc(p.nome)}<span class="sub">${esc(p.codigo)}</span></td><td class="num">${Q(p.quantidade)} ${esc(p.unidade)}</td><td class="num">${R(p.valor)}</td><td class="num muted">${pct(p.valor, c.valor)}</td></tr>`).join("")}
+    </tbody></table></td></tr>`).join("")}</tbody>
+    <tfoot><tr><td>Total</td><td class="esconder-m"></td><td class="num">${R(total)}</td>${comLucro ? `<td class="num esconder-m">${R(cats.reduce((s, c) => s + c.lucro, 0))}</td><td class="num esconder-m">${margemTxt(cats.reduce((s, c) => s + c.lucro, 0), total)}</td>` : `<td class="num">100%</td>`}<td></td></tr></tfoot></table>`;
+}
+function ligarCategorias(el) {
+  $$(".cat-linha", el).forEach((tr) => {
+    const alternar = () => {
+      const aberta = tr.classList.toggle("aberta");
+      tr.setAttribute("aria-expanded", aberta);
+      $(`.cat-prod[data-i="${tr.dataset.i}"]`, el).classList.toggle("oculto", !aberta);
+    };
+    tr.onclick = alternar;
+    tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); alternar(); } };
+  });
+}
+const graficoMeses = (el, meses) => graficoColunas(el, meses.map((m) => ({ ...m, total: m.liquido })), {
+  rotulo: (s) => mesCurto(s.mes),
+  dica: (s) => [R(s.total), `${mesLongo(s.mes)} · ${s.quantidade} venda${s.quantidade === 1 ? "" : "s"}`],
+  titulo: "Faturamento líquido por mês",
+});
+
+const ABAS_REL = {
+  async resumo(el, q) {
+    const [r, mais, est] = await Promise.all([GET("/api/relatorios/vendas?" + q), GET("/api/relatorios/mais-vendidos?" + q), GET("/api/relatorios/estoque")]);
+    el.innerHTML = `<div class="grid g-4">
+        ${kpi({ rot: "Faturamento líquido", val: R(r.liquido), det: `bruto ${R(r.bruto)} · descontos ${R(r.descontos)} · devoluções ${R(r.devolucoes)}`, icone: "trend" })}
+        ${kpi({ rot: "Lucro bruto", val: R(r.lucro_bruto), det: `margem ${margemTxt(r.lucro_bruto, r.liquido)} · custo ${R(r.custo_mercadorias)}`, icone: "chart", tom: r.lucro_bruto < 0 ? "danger" : "ok" })}
+        ${kpi({ rot: "Vendas", val: r.quantidade, det: `ticket médio ${R(r.ticket_medio)} · ${r.canceladas} cancelada(s)`, icone: "receipt", tom: "info" })}
+        ${kpi({ rot: "Recebido do crediário", val: R(r.recebimentos_crediario), icone: "wallet", tom: "warn" })}
+      </div>
+      <div class="grid g-2-1 mt">
+        <div class="card"><div class="card-h"><h2>Produtos mais vendidos</h2></div><div class="card-b flush">${mais.length ? `<div class="tabela"><table class="tbl-compacta"><thead><tr><th>Produto</th><th class="num">Quantidade</th><th class="num">Valor</th></tr></thead><tbody>
+          ${mais.map((p) => `<tr><td>${esc(p.nome)}<span class="sub">${esc(p.codigo)}</span></td><td class="num">${Q(p.quantidade)} ${esc(p.unidade)}</td><td class="num strong">${R(p.valor)}</td></tr>`).join("")}</tbody></table></div>`
+          : vazio("package", "Sem vendas no período")}</div></div>
+        <div class="pilha">
+          <div class="card"><div class="card-h"><h2>Por forma de pagamento</h2></div><div class="card-b">${Object.keys(r.por_forma).length ? listaFormas(r.por_forma) : vazio("receipt", "Sem vendas")}</div></div>
+          <div class="card"><div class="card-h"><h2>Estoque hoje</h2></div><div class="card-b"><dl class="lista-dados" style="margin:0">
+            <dt>Produtos ativos</dt><dd>${est.produtos}</dd><dt>Valor a preço de custo</dt><dd class="strong">${R(est.valor_custo)}</dd>
+            <dt>Valor a preço de venda</dt><dd class="strong">${R(est.valor_venda)}</dd><dt>Abaixo do mínimo</dt><dd class="${est.estoque_baixo.length ? "t-warn strong" : ""}">${est.estoque_baixo.length}</dd>
+            <dt>Zerados</dt><dd class="${est.sem_estoque.length ? "t-danger strong" : ""}">${est.sem_estoque.length}</dd></dl></div></div>
+        </div>
+      </div>
+      <div class="card mt"><div class="card-h"><div><h2>Segurança dos dados</h2><div class="sub">Confira se estoque, vendas, caixa e contas batem entre si, e faça cópias de segurança</div></div></div>
+        <div class="card-b"><div class="linha"><button class="btn" id="integridade">${ic("shield")}Conferir consistência</button><button class="btn" id="backup">${ic("download")}Fazer backup agora</button></div>
+        <div id="res-seg" class="mt-s"></div></div></div>`;
+    $("#integridade").onclick = async () => {
+      try {
+        const i = await GET("/api/integridade");
+        $("#res-seg").innerHTML = i.ok ? `<div class="aviso-box info">${ic("shield")}<div><b>Tudo confere.</b> Nenhuma diferença encontrada.</div></div>`
+          : `<div class="aviso-box danger">${ic("alert")}<div>${i.problemas.map(esc).join("<br>")}</div></div>`;
+      } catch (e) { erro(e); }
+    };
+    $("#backup").onclick = async () => {
+      try { const b = await POST("/api/backup"); $("#res-seg").innerHTML = `<div class="aviso-box info">${ic("download")}<div>Backup salvo em <b>${esc(b.arquivo)}</b></div></div>`; } catch (e) { erro(e); }
+    };
+  },
+
+  async meses(el, q) {
+    const meses = await GET("/api/relatorios/por-mes?" + q);
+    const soma = (k) => meses.reduce((s, m) => s + m[k], 0);
+    const total = soma("liquido"), lucro = soma("lucro_bruto"), vendas = soma("quantidade");
+    const melhor = meses.reduce((a, m) => (m.liquido > a.liquido ? m : a), meses[0]);
+    el.innerHTML = `<div class="grid g-4">
+        ${kpi({ rot: "Total no período", val: R(total), det: `${vendas} venda${vendas === 1 ? "" : "s"} em ${meses.length} ${meses.length === 1 ? "mês" : "meses"}`, icone: "trend" })}
+        ${kpi({ rot: "Média por mês", val: R(Math.round(total / meses.length)), icone: "calendar", tom: "info" })}
+        ${kpi({ rot: "Melhor mês", val: melhor.liquido ? R(melhor.liquido) : "—", det: melhor.liquido ? `em ${mesLongo(melhor.mes)}` : "sem vendas", icone: "chart", tom: "warn" })}
+        ${kpi({ rot: "Lucro bruto no período", val: R(lucro), det: `margem ${margemTxt(lucro, total)}`, icone: "wallet", tom: "ok" })}
+      </div>
+      <div class="card mt"><div class="card-h"><div><h2>Faturamento líquido por mês</h2><div class="sub">Vendas menos devoluções. O primeiro e o último mês contam só os dias dentro do período escolhido.</div></div></div>
+        <div class="card-b"><div id="graf-meses"></div></div></div>
+      <div class="card mt"><div class="tabela"><table><thead><tr><th>Mês</th><th class="num">Vendas</th><th class="num">Bruto</th><th class="num">Descontos</th><th class="num">Devoluções</th>
+        <th class="num">Líquido</th><th class="num">Lucro bruto</th><th class="num">Margem</th><th class="num">Ticket médio</th></tr></thead><tbody>
+        ${meses.slice().reverse().map((m) => `<tr><td class="strong">${maiuscula(mesLongo(m.mes))}</td><td class="num">${m.quantidade}</td><td class="num">${R(m.bruto)}</td>
+          <td class="num">${R(m.descontos)}</td><td class="num">${R(m.devolucoes)}</td><td class="num strong">${R(m.liquido)}</td><td class="num">${R(m.lucro_bruto)}</td>
+          <td class="num">${margemTxt(m.lucro_bruto, m.liquido)}</td><td class="num">${R(m.ticket_medio)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td>Total</td><td class="num">${vendas}</td><td class="num">${R(soma("bruto"))}</td><td class="num">${R(soma("descontos"))}</td><td class="num">${R(soma("devolucoes"))}</td>
+          <td class="num">${R(total)}</td><td class="num">${R(lucro)}</td><td class="num">${margemTxt(lucro, total)}</td><td class="num">${vendas ? R(Math.floor(soma("total") / vendas)) : R(0)}</td></tr></tfoot></table></div></div>`;
+    graficoMeses($("#graf-meses"), meses);
+  },
+
+  async categorias(el, q) {
+    const cats = await GET("/api/relatorios/por-categoria?" + q);
+    el.innerHTML = cats.length ? `<div class="card"><div class="card-h"><div><h2>Vendas por categoria</h2><div class="sub">Já descontadas as devoluções. Clique numa categoria para ver os produtos.</div></div></div>
+      <div class="card-b flush tabela">${tabelaCategorias(cats)}</div></div>
+      <p class="muted small">Produtos sem categoria aparecem em “Sem categoria”. A categoria é definida no cadastro do produto.</p>`
+      : `<div class="card">${vazio("tag", "Sem vendas no período")}</div>`;
+    ligarCategorias(el);
+  },
+
+  async clientes(el, q) {
+    const lista = await GET("/api/relatorios/por-cliente?" + q);
+    const total = lista.reduce((s, c) => s + c.liquido, 0);
+    el.innerHTML = lista.length ? `<div class="filtros"><label class="campo" style="flex:1;min-width:220px"><span>Procurar cliente</span>
+        <div class="busca">${ic("search")}<input id="f-cli-rel" placeholder="Nome do cliente" autocomplete="off"></div></label></div>
+      <div class="card"><div class="tabela"><table><thead><tr><th class="num">#</th><th>Cliente</th><th class="num">Compras</th><th class="num">Total comprado</th><th class="num esconder-m">% do total</th>
+        <th class="num esconder-m">Ticket médio</th><th class="esconder-m">Última compra</th><th class="num">Deve hoje</th><th></th></tr></thead><tbody>
+        ${lista.map((c, i) => `<tr class="cli-rel" data-nome="${esc((c.nome || "").toLowerCase())}"><td class="num muted">${i + 1}</td>
+          <td><b>${esc(c.nome)}</b>${c.telefone ? `<span class="sub">${esc(c.telefone)}</span>` : ""}</td><td class="num">${c.compras}</td>
+          <td class="num strong">${R(c.liquido)}${c.devolvido ? `<span class="sub">devolveu ${R(c.devolvido)}</span>` : ""}</td><td class="num esconder-m">${pct(c.liquido, total)}</td>
+          <td class="num esconder-m">${R(c.ticket_medio)}</td><td class="esconder-m">${dataBR(c.ultima).slice(0, 10)}</td>
+          <td class="num ${c.saldo_devedor ? "t-danger strong" : "muted"}">${c.cliente_id ? R(c.saldo_devedor) : "—"}</td>
+          <td class="acoes">${c.cliente_id ? `<a class="btn sm hist" href="#cliente/${c.cliente_id}" data-id="${c.cliente_id}">${ic("history")}Histórico</a>` : ""}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td></td><td>Total</td><td class="num">${lista.reduce((s, c) => s + c.compras, 0)}</td><td class="num">${R(total)}</td><td class="esconder-m"></td><td class="esconder-m"></td><td class="esconder-m"></td><td></td><td></td></tr></tfoot></table></div></div>`
+      : `<div class="card">${vazio("users", "Sem vendas no período")}</div>`;
+    if (!lista.length) return;
+    $("#f-cli-rel").oninput = (e) => {
+      const t = e.target.value.trim().toLowerCase();
+      $$(".cli-rel", el).forEach((tr) => tr.classList.toggle("oculto", !!t && !tr.dataset.nome.includes(t)));
+    };
+    // o histórico abre no mesmo período do relatório
+    $$(".hist", el).forEach((a) => a.addEventListener("click", () => Object.assign(periodoCliente, { ...periodoRel, id: Number(a.dataset.id) })));
+  },
+};
+
 paginas.relatorios = async (el) => {
-  if (!periodoRel.inicio) { periodoRel.inicio = CONFIG.hoje.slice(0, 8) + "01"; periodoRel.fim = CONFIG.hoje; }
-  const q = `inicio=${periodoRel.inicio}&fim=${periodoRel.fim}`;
-  const [r, mais, est] = await Promise.all([GET("/api/relatorios/vendas?" + q), GET("/api/relatorios/mais-vendidos?" + q), GET("/api/relatorios/estoque")]);
-  const f = filtroPeriodo(periodoRel, renderizar);
-  el.innerHTML = `${f.html}
+  CONFIG.primeira_venda = (await GET("/api/config")).primeira_venda;
+  if (!periodoRel.inicio) [periodoRel.inicio, periodoRel.fim] = resolverPreset(periodoRel.preset);
+  const f = filtroPeriodo(periodoRel, renderizar, PRESETS_MESES);
+  el.innerHTML = `${f.html}<div class="linha mb">${segmentado("aba-rel", [["resumo", "Resumo"], ["meses", "Mês a mês"], ["categorias", "Por categoria"], ["clientes", "Por cliente"]], abaRel)}</div>
+    <div id="rel-corpo"></div>`;
+  f.ligar();
+  aoSegmentar("aba-rel", (a) => { abaRel = a; renderizar(); });
+  await ABAS_REL[abaRel]($("#rel-corpo"), `inicio=${periodoRel.inicio}&fim=${periodoRel.fim}`);
+};
+
+// ------------------------------------------------------- histórico do cliente
+const periodoCliente = { preset: "tudo", inicio: "", fim: "", id: null };
+paginas.cliente = async (el, param) => {
+  const cid = Number(param);
+  if (periodoCliente.id !== cid) Object.assign(periodoCliente, { preset: "tudo", inicio: "", fim: "", id: cid });
+  // "Tudo" = desde a primeira compra deste cliente
+  const q = periodoCliente.preset === "tudo" ? "" : `?inicio=${periodoCliente.inicio}&fim=${periodoCliente.fim}`;
+  const h = await GET(`/api/clientes/${cid}/historico${q}`);
+  Object.assign(periodoCliente, { inicio: h.inicio, fim: h.fim });
+  const c = h.cliente, r = h.resumo;
+  const f = filtroPeriodo(periodoCliente, renderizar, PRESETS_MESES);
+  const produtos = h.por_categoria.flatMap((cat) => cat.produtos).sort((a, b) => b.valor - a.valor).slice(0, 10);
+  const concluidas = h.compras.filter((v) => v.status === "CONCLUIDA").length;
+  el.innerHTML = `
+    <div class="card mb"><div class="card-b linha" style="gap:16px">
+      <div class="pessoa" style="flex:1;min-width:240px">${avatar(c.nome, "g")}<div><div class="nome" style="font-size:17px">${esc(c.nome)}</div>
+        <div class="muted small">${[docFmt(c.documento), c.telefone, c.endereco].filter(Boolean).map(esc).join(" · ") || "sem dados de contato"}</div></div></div>
+      <div class="linha">${c.saldo_devedor ? `<a class="btn primario" href="#receber-cliente/${c.id}">${ic("wallet")}Receber</a>` : ""}<a class="btn" href="#clientes">Voltar para clientes</a></div></div></div>
+    ${f.html.replace('class="filtros"', 'class="filtros" id="filtro-cliente"')}
     <div class="grid g-4">
-      ${kpi({ rot: "Faturamento líquido", val: R(r.liquido), det: `bruto ${R(r.bruto)} · descontos ${R(r.descontos)} · devoluções ${R(r.devolucoes)}`, icone: "trend" })}
-      ${kpi({ rot: "Lucro bruto", val: R(r.lucro_bruto), det: `custo das mercadorias ${R(r.custo_mercadorias)}`, icone: "chart", tom: r.lucro_bruto < 0 ? "danger" : "ok" })}
-      ${kpi({ rot: "Vendas", val: r.quantidade, det: `ticket médio ${R(r.ticket_medio)} · ${r.canceladas} cancelada(s)`, icone: "receipt", tom: "info" })}
-      ${kpi({ rot: "Recebido do crediário", val: R(r.recebimentos_crediario), icone: "wallet", tom: "warn" })}
+      ${kpi({ rot: "Total comprado", val: R(r.liquido), det: `${r.quantidade} compra${r.quantidade === 1 ? "" : "s"} · ticket médio ${R(r.ticket_medio)}${r.devolucoes ? ` · devolveu ${R(r.devolucoes)}` : ""}`, icone: "cart" })}
+      ${kpi({ rot: "Lucro bruto com o cliente", val: R(r.lucro_bruto), det: `margem ${margemTxt(r.lucro_bruto, r.liquido)}`, icone: "chart", tom: "ok" })}
+      ${kpi({ rot: "Pagou no crediário", val: R(h.pago_crediario), det: "no período escolhido", icone: "wallet", tom: "info" })}
+      ${kpi({ rot: "Deve hoje", val: R(c.saldo_devedor), det: c.valor_vencido ? `<span class="t-danger">${R(c.valor_vencido)} vencido</span>` : `limite livre ${R(c.credito_disponivel)}`, icone: "alert", tom: c.valor_vencido ? "danger" : "warn" })}
+    </div>
+    <div class="grid g-2 mt">
+      <div class="card"><div class="card-h"><div><h2>O que compra, por categoria</h2><div class="sub">Clique para ver os produtos</div></div></div>
+        <div class="card-b flush tabela">${h.por_categoria.length ? tabelaCategorias(h.por_categoria, { comLucro: false }) : vazio("tag", "Nenhuma compra no período")}</div></div>
+      <div class="card"><div class="card-h"><h2>Compras por mês</h2></div><div class="card-b"><div id="graf-cli"></div></div></div>
     </div>
     <div class="grid g-2-1 mt">
-      <div class="card"><div class="card-h"><h2>Produtos mais vendidos</h2></div><div class="card-b flush">${mais.length ? `<div class="tabela"><table class="tbl-compacta"><thead><tr><th>Produto</th><th class="num">Quantidade</th><th class="num">Valor</th></tr></thead><tbody>
-        ${mais.map((p) => `<tr><td>${esc(p.nome)}<span class="sub">${esc(p.codigo)}</span></td><td class="num">${Q(p.quantidade)} ${esc(p.unidade)}</td><td class="num strong">${R(p.valor)}</td></tr>`).join("")}</tbody></table></div>`
-        : vazio("package", "Sem vendas no período")}</div></div>
-      <div class="pilha">
-        <div class="card"><div class="card-h"><h2>Por forma de pagamento</h2></div><div class="card-b">${Object.keys(r.por_forma).length ? listaFormas(r.por_forma) : vazio("receipt", "Sem vendas")}</div></div>
-        <div class="card"><div class="card-h"><h2>Estoque</h2></div><div class="card-b"><dl class="lista-dados" style="margin:0">
-          <dt>Produtos ativos</dt><dd>${est.produtos}</dd><dt>Valor a preço de custo</dt><dd class="strong">${R(est.valor_custo)}</dd>
-          <dt>Valor a preço de venda</dt><dd class="strong">${R(est.valor_venda)}</dd><dt>Abaixo do mínimo</dt><dd class="${est.estoque_baixo.length ? "t-warn strong" : ""}">${est.estoque_baixo.length}</dd>
-          <dt>Zerados</dt><dd class="${est.sem_estoque.length ? "t-danger strong" : ""}">${est.sem_estoque.length}</dd></dl></div></div>
-      </div>
+      <div class="card"><div class="card-h"><div><h2>Compras</h2><div class="sub">${concluidas} no período${h.compras.length > concluidas ? ` (+ ${h.compras.length - concluidas} cancelada${h.compras.length - concluidas === 1 ? "" : "s"})` : ""} — clique para ver os itens</div></div></div>
+        <div class="card-b flush">${h.compras.length ? h.compras.map((v) => `<details class="compra-det">
+          <summary><span class="strong">Nº ${v.id}</span><span class="muted">${dataBR(v.data)}</span><span class="muted esconder-m">${esc((v.formas || "").split(", ").map(forma).join(", "))}</span>
+            <span style="margin-left:auto" class="num ${v.status === "CANCELADA" ? "muted" : "strong"}">${R(v.total - v.total_devolvido)}</span>${v.status === "CANCELADA" ? badge("CANCELADA") : ""}<span class="chev">${ic("chevron")}</span></summary>
+          <table class="tbl-compacta sub-tabela"><tbody>${v.itens.map((i) => `<tr><td>${esc(i.descricao)}${i.quantidade_devolvida ? `<span class="sub t-danger">devolveu ${Q(i.quantidade_devolvida)}</span>` : ""}</td>
+            <td class="num">${Q(i.quantidade)} ${esc(i.unidade)}</td><td class="num">${R(i.preco_unitario)}</td><td class="num">${R(i.total)}</td></tr>`).join("")}
+            ${v.desconto ? `<tr><td colspan="3" class="muted">Desconto</td><td class="num">- ${R(v.desconto)}</td></tr>` : ""}</tbody></table></details>`).join("")
+          : vazio("receipt", "Nenhuma compra no período")}</div></div>
+      <div class="card"><div class="card-h"><h2>Produtos que mais compra</h2></div><div class="card-b flush">${produtos.length ? `<table class="tbl-compacta"><tbody>
+        ${produtos.map((p) => `<tr><td>${esc(p.nome)}<span class="sub">${Q(p.quantidade)} ${esc(p.unidade)}</span></td><td class="num strong">${R(p.valor)}</td></tr>`).join("")}</tbody></table>`
+        : vazio("package", "Nenhum produto")}</div></div>
     </div>
-    <div class="card mt"><div class="card-h"><div><h2>Segurança dos dados</h2><div class="sub">Confira se estoque, vendas, caixa e contas batem entre si, e faça cópias de segurança</div></div></div>
-      <div class="card-b"><div class="linha"><button class="btn" id="integridade">${ic("shield")}Conferir consistência</button><button class="btn" id="backup">${ic("download")}Fazer backup agora</button></div>
-      <div id="res-seg" class="mt-s"></div></div></div>`;
+    ${h.baixas.length ? `<div class="card mt"><div class="card-h"><h2>Pagamentos do crediário no período</h2></div><div class="tabela"><table class="tbl-compacta"><thead><tr><th>Data</th><th>Forma</th><th class="num">Valor</th><th class="num">Ficou devendo</th><th>Situação</th></tr></thead><tbody>
+      ${h.baixas.map((b) => `<tr><td>${dataBR(b.data)}</td><td>${forma(b.forma)}</td><td class="num strong">${R(b.valor)}</td><td class="num">${R(b.saldo_apos)}</td><td>${badge(b.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
   f.ligar();
-  $("#integridade").onclick = async () => {
-    try {
-      const i = await GET("/api/integridade");
-      $("#res-seg").innerHTML = i.ok ? `<div class="aviso-box info">${ic("shield")}<div><b>Tudo confere.</b> Nenhuma diferença encontrada.</div></div>`
-        : `<div class="aviso-box danger">${ic("alert")}<div>${i.problemas.map(esc).join("<br>")}</div></div>`;
-    } catch (e) { erro(e); }
-  };
-  $("#backup").onclick = async () => {
-    try { const b = await POST("/api/backup"); $("#res-seg").innerHTML = `<div class="aviso-box info">${ic("download")}<div>Backup salvo em <b>${esc(b.arquivo)}</b></div></div>`; } catch (e) { erro(e); }
-  };
+  graficoMeses($("#graf-cli"), h.por_mes);
+  ligarCategorias(el);
 };
 
 // ===================================================================== casca
@@ -1505,7 +1664,7 @@ async function renderizar() {
   const [nome, param] = (location.hash.slice(1) || "painel").split("/");
   const id = paginas[nome] ? nome : "painel";
   paginaAtual = id;
-  $$(".nav a").forEach((a) => a.classList.toggle("ativo", a.dataset.p === id));
+  $$(".nav a").forEach((a) => a.classList.toggle("ativo", a.dataset.p === (id === "cliente" ? "clientes" : id)));
   const [t, s] = TITULOS[id];
   $("#titulo-pagina").textContent = t;
   $("#sub-pagina").textContent = s;
