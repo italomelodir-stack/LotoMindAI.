@@ -5,9 +5,11 @@ Funciona num computador com Windows 10 ou 11, abre no navegador e não depende d
 
 ## Instalar no Windows
 
-Use o instalador **`Instalar-Sistema-da-Loja-1.0.0.exe`** (um arquivo só, cerca de 8 MB):
+Use o instalador **[`Instalar-Sistema-da-Loja-1.0.0.exe`](baixar/Instalar-Sistema-da-Loja-1.0.0.exe)** (um arquivo
+só, cerca de 8 MB, na pasta `baixar/`):
 
-1. Copie o arquivo para o computador da loja (pen drive, e-mail, download...) e dê dois cliques nele.
+1. No computador da loja, abra o link acima e clique no botão de baixar (**Download raw file**, ícone de seta para
+   baixo). Depois dê dois cliques no arquivo baixado (fica na pasta *Downloads*).
 2. Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**.
    (O aviso aparece porque o instalador não tem assinatura digital paga; é comum em programas de pequenas empresas.)
 3. Clique em **Instalar** e depois em **Concluir**. O sistema abre no navegador.
@@ -19,7 +21,7 @@ Ficam o atalho **Sistema da Loja** na área de trabalho e no menu Iniciar, e o i
 <details>
 <summary>Gerar o instalador ou instalar sem ele</summary>
 
-- **Gerar o `.exe`** (para quem mexe no programa): com o NSIS 3 instalado (Windows: nsis.sourceforge.io;
+- **Gerar o `.exe`** (para quem mexe no programa; depois copie para `baixar/` ao lançar uma versão): com o NSIS 3 instalado (Windows: nsis.sourceforge.io;
   Linux: `apt install nsis`), rode `python instalador/construir_instalador.py`. O instalador sai em
   `dist/Instalar-Sistema-da-Loja-<versão>.exe`. O Python oficial de Windows é baixado do NuGet e conferido pelo SHA-256.
 - **Sem o `.exe`, pelo ZIP do GitHub:** *Code → Download ZIP*, extraia (botão direito → *Extrair tudo*) e dê dois
